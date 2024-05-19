@@ -1,0 +1,16 @@
+{
+  "domain": "heatmiser_netmonitor",
+  "version": "2.0.0",
+  "name": "Heatmiser NetMonitor",
+  "config_flow": true,
+  "documentation": "https://www.home-assistant.io/integrations/heatmiser_netmonitor",
+  "requirements": [],
+  "ssdp": [],
+  "zeroconf": [],
+  "homekit": {},
+  "dependencies": [],
+  "codeowners": [
+    "@mmillmor"
+  ],
+  "iot_class": "local_polling"
+}
