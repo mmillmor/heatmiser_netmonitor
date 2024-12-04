@@ -45,9 +45,17 @@ set_holiday:
       required: true
       selector:
         datetime:
-    away:
-      name: Away
-      description: Is the holiday period for home or away.
-      required: true
-      selector:
-        boolean:
+
+set_home:
+  name: Set Home
+  description: Set home mode.
+  target:
+    entity:
+      domain: climate
+
+set_away:
+  name: Set Away
+  description: Set away mode.
+  target:
+    entity:
+      domain: climate

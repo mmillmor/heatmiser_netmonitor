@@ -62,13 +62,23 @@ async def async_setup_entry(hass: HomeAssistant, config_entry , async_add_entiti
                 {
                     vol.Required("start_date_time"): cv.datetime,
                     vol.Required("end_date_time"): cv.datetime,
-                    vol.Required("away", default=True): cv.boolean,
                 },
             )
     ),
         "async_set_holiday",
     )
 
+    platform.async_register_entity_service(
+        "set_home",
+        {},
+        "async_set_home",
+    )
+
+    platform.async_register_entity_service(
+        "set_away",
+        {},
+        "async_set_away",
+    )
 
 class HeatmiserClimate(ClimateEntity):
     """Climate object for a Heatmiser stat."""
@@ -148,9 +158,17 @@ class HeatmiserClimate(ClimateEntity):
         """Set the time."""
         await self.hub.set_time_async()
 
-    async def async_set_holiday(self,start_date_time,end_date_time,away) -> None:
+    async def async_set_home(self) -> None:
+        """Set home."""
+        await self.hub.set_home_async()
+
+    async def async_set_away(self) -> None:
+        """Set away."""
+        await self.hub.set_away_async()
+
+    async def async_set_holiday(self,start_date_time,end_date_time) -> None:
         """Set a holiday."""
-        await self.hub.set_holiday_async(start_date_time,end_date_time,away)
+        await self.hub.set_holiday_async(start_date_time,end_date_time)
 
     async def async_update(self) -> None:
         """Retrieve latest state."""

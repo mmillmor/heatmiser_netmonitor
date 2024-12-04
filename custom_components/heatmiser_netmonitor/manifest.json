@@ -1,9 +1,9 @@
 {
   "domain": "heatmiser_netmonitor",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "name": "Heatmiser NetMonitor",
   "config_flow": true,
-  "documentation": "https://www.home-assistant.io/integrations/heatmiser_netmonitor",
+  "documentation": "https://github.com/mmillmor/heatmiser_netmonitor",
   "requirements": [],
   "ssdp": [],
   "zeroconf": [],

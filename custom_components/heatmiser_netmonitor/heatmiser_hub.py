@@ -141,21 +141,41 @@ class HeatmiserHub:
         """Set the time asynchronously."""
         return await self.hass.async_add_executor_job(self.set_boost,name,hours)
 
-    def set_holiday(self,start_date_time,end_date_time,away):
-            response = requests.post(
-                "http://" + self.host + "/holiday.htm",
-                data={"rdbkck": "0",
-                 "starttime": start_date_time.strftime("%H.%M"),
-                 "startdate": start_date_time.strftime("%d.%m.%y"),
-                 "endtime": end_date_time.strftime("%H.%M"),
-                 "enddate": end_date_time.strftime("%d.%m.%y"),
-                 "actHoliday":"2" if away else "0"},
-                auth=HTTPBasicAuth(self.username, self.password),
-            )
+    def set_holiday(self,start_date_time,end_date_time):
+        response = requests.post(
+            "http://" + self.host + "/holiday.htm",
+            data={"rdbkck": "0",
+                "starttime": start_date_time.strftime("%H.%M"),
+                "startdate": start_date_time.strftime("%d.%m.%y"),
+                "endtime": end_date_time.strftime("%H.%M"),
+                "enddate": end_date_time.strftime("%d.%m.%y"),
+                "actHoliday":"1"},
+            auth=HTTPBasicAuth(self.username, self.password),
+        )
 
-    async def set_holiday_async(self,start_date_time,end_date_time,away):
+    async def set_holiday_async(self,start_date_time,end_date_time):
+        return await self.hass.async_add_executor_job(self.set_holiday,start_date_time,end_date_time)
+
+    def set_home(self,home_away):
+        start_date_time = datetime.now()
+        response = requests.post(
+            "http://" + self.host + "/holiday.htm",
+            data={"rdbkck": "0",
+                "starttime": start_date_time.strftime("%H.%M"),
+                "startdate": start_date_time.strftime("%d.%m.%y"),
+                "endtime": start_date_time.strftime("%H.%M"),
+                "enddate": start_date_time.strftime("%d.%m.%y"),
+                "actHoliday":home_away},
+            auth=HTTPBasicAuth(self.username, self.password),
+        )
+
+    async def set_home_async(self):
         """Set the time asynchronously."""
-        return await self.hass.async_add_executor_job(self.set_holiday,start_date_time,end_date_time,away)
+        return await self.hass.async_add_executor_job(self.set_home,"0")
+
+    async def set_away_async(self):
+        """Set the time asynchronously."""
+        return await self.hass.async_add_executor_job(self.set_home,"2")
 
     def get_devices(self):
         """Get the list of devices."""
