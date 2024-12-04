@@ -38,7 +38,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry , async_add_entiti
     host = config_entry.data.get("host")
     username = config_entry.data.get("username")
     password = config_entry.data.get("password")
-    
+
     hub = HeatmiserHub(host, username, password, hass)
     devices = await hub.get_devices_async()
     entities = []
@@ -53,6 +53,20 @@ async def async_setup_entry(hass: HomeAssistant, config_entry , async_add_entiti
         "set_system_time",
         {},
         "async_set_time",
+    )
+
+    platform.async_register_entity_service(
+        "set_holiday",
+        vol.All(
+            cv.make_entity_service_schema(
+                {
+                    vol.Required("start_date_time"): cv.datetime,
+                    vol.Required("end_date_time"): cv.datetime,
+                    vol.Required("away", default=True): cv.boolean,
+                },
+            )
+    ),
+        "async_set_holiday",
     )
 
 
@@ -134,6 +148,10 @@ class HeatmiserClimate(ClimateEntity):
         """Set the time."""
         await self.hub.set_time_async()
 
+    async def async_set_holiday(self,start_date_time,end_date_time,away) -> None:
+        """Set a holiday."""
+        await self.hub.set_holiday_async(start_date_time,end_date_time,away)
+
     async def async_update(self) -> None:
         """Retrieve latest state."""
         new_stat_state = await self.hub.get_device_status_async(self.stat.name)
@@ -152,5 +170,3 @@ class HeatmiserClimate(ClimateEntity):
             name="Netmonitor",
             manufacturer="Heatmiser",
         )
-
-

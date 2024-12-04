@@ -115,7 +115,7 @@ class HeatmiserHub:
 		    data=postData,
 		    auth=HTTPBasicAuth(self.username, self.password),
             )
-    
+
     async def set_time_async(self):
         """Set the time asynchronously."""
         return await self.hass.async_add_executor_job(self.set_time)
@@ -136,11 +136,26 @@ class HeatmiserHub:
                     auth=HTTPBasicAuth(self.username, self.password),
                 )
             time.sleep(1)
-    
+
     async def set_boost_async(self,name,hours):
         """Set the time asynchronously."""
         return await self.hass.async_add_executor_job(self.set_boost,name,hours)
 
+    def set_holiday(self,start_date_time,end_date_time,away):
+            response = requests.post(
+                "http://" + self.host + "/holiday.htm",
+                data={"rdbkck": "0",
+                 "starttime": start_date_time.strftime("%H.%M"),
+                 "startdate": start_date_time.strftime("%d.%m.%y"),
+                 "endtime": end_date_time.strftime("%H.%M"),
+                 "enddate": end_date_time.strftime("%d.%m.%y"),
+                 "actHoliday":"2" if away else "0"},
+                auth=HTTPBasicAuth(self.username, self.password),
+            )
+
+    async def set_holiday_async(self,start_date_time,end_date_time,away):
+        """Set the time asynchronously."""
+        return await self.hass.async_add_executor_job(self.set_holiday,start_date_time,end_date_time,away)
 
     def get_devices(self):
         """Get the list of devices."""
@@ -280,7 +295,7 @@ class HeatmiserHub:
                 state = HVACAction.IDLE
                 if current_state == "1":
                     state = HVACAction.HEATING
-                
+
             hw_timer_output=STATE_UNAVAILABLE
             try:
                 current_hw_available = int(statvals[12:13])

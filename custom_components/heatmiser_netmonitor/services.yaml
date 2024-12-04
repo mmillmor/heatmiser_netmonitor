@@ -24,3 +24,30 @@ boost_hot_water:
       example: 01:00:00
       selector:
         time:
+
+set_holiday:
+  name: Set Holiday
+  description: Set a holiday.
+  target:
+    entity:
+      domain: climate
+  fields:
+    start_date_time:
+      example: "2022-03-22 20:00:00"
+      description: Start date and time of the holiday.
+      required: true
+      selector:
+        datetime:
+    end_date_time:
+      name: End Datetime
+      description: End date and time of the holiday.
+      example: "2022-03-22 20:00:00"
+      required: true
+      selector:
+        datetime:
+    away:
+      name: Away
+      description: Is the holiday period for home or away.
+      required: true
+      selector:
+        boolean:
