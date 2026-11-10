@@ -2,8 +2,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "Setup Heatmiset NetMonitor",
-        "description": "Enter the IP address of your NetMonitor. It should look like this: 192.168.0.168.",
+        "title": "Set up Heatmiser NetMonitor",
+        "description": "Enter the IP address and web login of your NetMonitor. The address should look like this: 192.168.0.168.",
         "data": {
           "host": "Host IP address",
           "username": "Username",
@@ -12,25 +12,30 @@
       }
     },
     "error": {
-      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "cannot_connect": "Failed to connect to the NetMonitor",
+      "invalid_auth": "Invalid username or password",
+      "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+      "already_configured": "This NetMonitor is already configured"
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Edit Heatmiset NetMonitor settings",
-        "description": "Enter the IP address of your NetMonitor. It should look like this: 192.168.0.168.",
+        "title": "Edit Heatmiser NetMonitor settings",
+        "description": "Enter the IP address and web login of your NetMonitor. The address should look like this: 192.168.0.168.",
         "data": {
           "host": "Host IP address",
           "username": "Username",
           "password": "Password"
         }
       }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the NetMonitor",
+      "invalid_auth": "Invalid username or password",
+      "unknown": "Unexpected error"
     }
   }
 }

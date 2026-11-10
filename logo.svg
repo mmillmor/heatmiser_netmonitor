@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Heatmiser NetMonitor">
+  <title>Heatmiser NetMonitor</title>
+  <defs>
+    <linearGradient id="flame" x1="0" y1="1" x2="0.4" y2="0">
+      <stop offset="0" stop-color="#F2B94B"/>
+      <stop offset="1" stop-color="#F6CD7C"/>
+    </linearGradient>
+    <!-- Leaves a thin gap between the flame and the red circle, whatever the background -->
+    <mask id="flame-gap" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <rect width="256" height="256" fill="#fff"/>
+      <circle cx="128" cy="160" r="43" fill="#000"/>
+    </mask>
+  </defs>
+
+  <!-- Blue swirl: thickest at the bottom left, tapering to two tips at the top -->
+  <path fill="#6DB4E8"
+        d="M156.2 7.3
+           A126 126 0 1 0 254 130
+           C254 90 215 30 168 26
+           C196 32 241 70 241 112
+           A107 107 0 1 1 156.2 7.3 Z"/>
+
+  <!-- Flame: two arcs meeting at the tip -->
+  <path d="M85.5 144 A66 93 0 0 1 151.6 51.2 A94 94 0 0 0 168 141.6 Z"
+        fill="url(#flame)" mask="url(#flame-gap)"/>
+
+  <!-- Red core -->
+  <circle cx="128" cy="160" r="40" fill="#D13D3D"/>
+</svg>

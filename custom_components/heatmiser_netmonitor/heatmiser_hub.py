@@ -1,6 +1,7 @@
 """Config flow for Heatmiser NetMonitor integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime
@@ -58,6 +59,9 @@ class HeatmiserHub:
         self.username = username
         self.password = password
         self.hass = hass
+        # The NetMonitor keeps a "currently selected stat" server-side, so
+        # requests must not interleave.
+        self._lock = asyncio.Lock()
 
     def async_auth(self) -> bool:
         """Validate the username, password and host."""
@@ -65,17 +69,19 @@ class HeatmiserHub:
         response = requests.get(
             "http://" + self.host + "/quickview.htm",
             auth=HTTPBasicAuth(self.username, self.password),
+            timeout=10,
         )
-        if response.status_code == 200:
-            return True
-        else:
+        if response.status_code in (401, 403):
             return False
+        response.raise_for_status()
+        return True
 
     async def authenticate(self) -> bool:
-        """Validate the username, password and host asynchronously."""
-        response = self.hass.async_add_executor_job(self.async_auth)
+        """Validate the username, password and host asynchronously.
 
-        return response
+        Raises requests.RequestException if the device cannot be reached.
+        """
+        return await self.hass.async_add_executor_job(self.async_auth)
 
     def set_time(self):
         """Get the networkSetup."""
@@ -115,10 +121,11 @@ class HeatmiserHub:
 		    data=postData,
 		    auth=HTTPBasicAuth(self.username, self.password),
             )
-
+    
     async def set_time_async(self):
         """Set the time asynchronously."""
-        return await self.hass.async_add_executor_job(self.set_time)
+        async with self._lock:
+            return await self.hass.async_add_executor_job(self.set_time)
 
     def set_boost(self, name, hours):
         """Set a hot water boost time."""
@@ -136,46 +143,62 @@ class HeatmiserHub:
                     auth=HTTPBasicAuth(self.username, self.password),
                 )
             time.sleep(1)
-
+    
     async def set_boost_async(self,name,hours):
         """Set the time asynchronously."""
-        return await self.hass.async_add_executor_job(self.set_boost,name,hours)
+        async with self._lock:
+            return await self.hass.async_add_executor_job(self.set_boost, name, hours)
 
-    def set_holiday(self,start_date_time,end_date_time):
-        response = requests.post(
+
+    def set_holiday(self, start_date_time, end_date_time):
+        """Set a holiday."""
+        requests.post(
             "http://" + self.host + "/holiday.htm",
-            data={"rdbkck": "0",
+            data={
+                "rdbkck": "0",
                 "starttime": start_date_time.strftime("%H.%M"),
                 "startdate": start_date_time.strftime("%d.%m.%y"),
                 "endtime": end_date_time.strftime("%H.%M"),
                 "enddate": end_date_time.strftime("%d.%m.%y"),
-                "actHoliday":"1"},
+                "actHoliday": "1",
+            },
             auth=HTTPBasicAuth(self.username, self.password),
+            timeout=10,
         )
 
-    async def set_holiday_async(self,start_date_time,end_date_time):
-        return await self.hass.async_add_executor_job(self.set_holiday,start_date_time,end_date_time)
+    async def set_holiday_async(self, start_date_time, end_date_time):
+        """Set a holiday asynchronously."""
+        async with self._lock:
+            return await self.hass.async_add_executor_job(
+                self.set_holiday, start_date_time, end_date_time
+            )
 
-    def set_home(self,home_away):
+    def set_home(self, home_away):
+        """Set home ("0") or away ("2") mode."""
         start_date_time = datetime.now()
-        response = requests.post(
+        requests.post(
             "http://" + self.host + "/holiday.htm",
-            data={"rdbkck": "0",
+            data={
+                "rdbkck": "0",
                 "starttime": start_date_time.strftime("%H.%M"),
                 "startdate": start_date_time.strftime("%d.%m.%y"),
                 "endtime": start_date_time.strftime("%H.%M"),
                 "enddate": start_date_time.strftime("%d.%m.%y"),
-                "actHoliday":home_away},
+                "actHoliday": home_away,
+            },
             auth=HTTPBasicAuth(self.username, self.password),
+            timeout=10,
         )
 
     async def set_home_async(self):
-        """Set the time asynchronously."""
-        return await self.hass.async_add_executor_job(self.set_home,"0")
+        """Set home mode asynchronously."""
+        async with self._lock:
+            return await self.hass.async_add_executor_job(self.set_home, "0")
 
     async def set_away_async(self):
-        """Set the time asynchronously."""
-        return await self.hass.async_add_executor_job(self.set_home,"2")
+        """Set away mode asynchronously."""
+        async with self._lock:
+            return await self.hass.async_add_executor_job(self.set_home, "2")
 
     def get_devices(self):
         """Get the list of devices."""
@@ -184,6 +207,7 @@ class HeatmiserHub:
         response = requests.get(
             "http://" + self.host + "/quickview.htm",
             auth=HTTPBasicAuth(self.username, self.password),
+            timeout=10,
         )
         if response.status_code == 200:
             content = response.content.decode("utf-8")
@@ -233,12 +257,13 @@ class HeatmiserHub:
                             -1
                         )
                     )
-                    i = i + 1
+                i = i + 1
         return device_list
 
     async def get_devices_async(self):
         """Get the list of devices asynchronously."""
-        return await self.hass.async_add_executor_job(self.get_devices)
+        async with self._lock:
+            return await self.hass.async_add_executor_job(self.get_devices)
 
     def set_temperature(self, name, target_temperature):
         """Set a device target temperature."""
@@ -259,9 +284,10 @@ class HeatmiserHub:
 
     async def set_temperature_async(self, name, target_temperature):
         """Set a device target temperature asynchronously."""
-        return await self.hass.async_add_executor_job(
-            self.set_temperature, name, target_temperature
-        )
+        async with self._lock:
+            return await self.hass.async_add_executor_job(
+                self.set_temperature, name, target_temperature
+            )
 
     def set_mode(self, name, hvac_mode):
         """Set a device target mode."""
@@ -284,7 +310,10 @@ class HeatmiserHub:
 
     async def set_mode_async(self, name, hvac_mode):
         """Set a device target mode asynchronously."""
-        return await self.hass.async_add_executor_job(self.set_mode, name, hvac_mode)
+        async with self._lock:
+            return await self.hass.async_add_executor_job(
+                self.set_mode, name, hvac_mode
+            )
 
     def get_device_status(self, name) -> HeatmiserStat:
         """Get the device status."""
@@ -293,6 +322,7 @@ class HeatmiserHub:
             "http://" + self.host + "/right.htm",
             data={"rdbkck": "0", "curSelStat": name},
             auth=HTTPBasicAuth(self.username, self.password),
+            timeout=10,
         )
         if response.status_code == 200:
             content = response.content.decode("utf-8")
@@ -315,7 +345,7 @@ class HeatmiserHub:
                 state = HVACAction.IDLE
                 if current_state == "1":
                     state = HVACAction.HEATING
-
+                
             hw_timer_output=STATE_UNAVAILABLE
             try:
                 current_hw_available = int(statvals[12:13])
@@ -341,4 +371,7 @@ class HeatmiserHub:
 
     async def get_device_status_async(self, name) -> HeatmiserStat:
         """Get the device status asynchronously."""
-        return await self.hass.async_add_executor_job(self.get_device_status, name)
+        async with self._lock:
+            return await self.hass.async_add_executor_job(
+                self.get_device_status, name
+            )

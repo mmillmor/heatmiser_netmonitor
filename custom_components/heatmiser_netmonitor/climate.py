@@ -1,54 +1,31 @@
 """Climate module for the Heatmiser NetMonitor integration."""
-import voluptuous as vol
 import logging
 
+import voluptuous as vol
+
 from homeassistant.components.climate import ClimateEntity
-from homeassistant.components.climate.const import (
-    HVACAction,
-    HVACMode,
-    ClimateEntityFeature
-)
+from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers import config_validation as cv, entity_platform
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .heatmiser_hub import HeatmiserHub, HeatmiserStat
 from .const import DOMAIN
-from pprint import pprint
+from .coordinator import HeatmiserConfigEntry, HeatmiserCoordinator
+from .heatmiser_hub import HeatmiserStat
+
 _LOGGER = logging.getLogger(__name__)
 
 
-
-def setup_platform(hass: HomeAssistant, config: ConfigType) -> None:
-    """Set up the Heatmiser platform."""
-    # Assign configuration variables.
-    # The configuration check takes care they are present.
-    host = config["host"]
-    username = config["username"]
-    password = config["password"]
-
-    hub = HeatmiserHub(host, username, password, hass)
-    hub.get_devices_async()
-
-
-async def async_setup_entry(hass: HomeAssistant, config_entry , async_add_entities):
+async def async_setup_entry(
+    hass: HomeAssistant, config_entry: HeatmiserConfigEntry, async_add_entities
+):
     """Set up Heatmiser climate based on config_entry."""
-    host = config_entry.data.get("host")
-    username = config_entry.data.get("username")
-    password = config_entry.data.get("password")
-
-    hub = HeatmiserHub(host, username, password, hass)
-    devices = await hub.get_devices_async()
-    entities = []
-    if devices:
-        for stat in devices:
-            entities.append(HeatmiserClimate(stat, hub))
-    async_add_entities(entities, True)
+    coordinator = config_entry.runtime_data
+    async_add_entities(HeatmiserClimate(coordinator, stat) for stat in coordinator.stats)
 
     platform = entity_platform.async_get_current_platform()
-
     platform.async_register_entity_service(
         "set_system_time",
         {},
@@ -57,62 +34,63 @@ async def async_setup_entry(hass: HomeAssistant, config_entry , async_add_entiti
 
     platform.async_register_entity_service(
         "set_holiday",
-        vol.All(
-            cv.make_entity_service_schema(
-                {
-                    vol.Required("start_date_time"): cv.datetime,
-                    vol.Required("end_date_time"): cv.datetime,
-                },
-            )
-    ),
+        cv.make_entity_service_schema(
+            {
+                vol.Required("start_date_time"): cv.datetime,
+                vol.Required("end_date_time"): cv.datetime,
+            },
+        ),
         "async_set_holiday",
     )
 
-    platform.async_register_entity_service(
-        "set_home",
-        {},
-        "async_set_home",
-    )
+    platform.async_register_entity_service("set_home", {}, "async_set_home")
 
-    platform.async_register_entity_service(
-        "set_away",
-        {},
-        "async_set_away",
-    )
+    platform.async_register_entity_service("set_away", {}, "async_set_away")
 
-class HeatmiserClimate(ClimateEntity):
+
+class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
     """Climate object for a Heatmiser stat."""
 
-    def __init__(self, stat: HeatmiserStat, hub: HeatmiserHub) -> None:
+    def __init__(self, coordinator: HeatmiserCoordinator, stat: HeatmiserStat) -> None:
         """Set up Heatmiser climate entity based on a stat."""
-        self._attr_supported_features = (ClimateEntityFeature(0) | ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF)
+        super().__init__(coordinator)
+        self._stat_name = stat.name
+        self._stat_id = str(stat.id)
+        self.hub = coordinator.hub
+        self._attr_supported_features = (
+            ClimateEntityFeature.TARGET_TEMPERATURE
+            | ClimateEntityFeature.TURN_ON
+            | ClimateEntityFeature.TURN_OFF
+        )
         self._hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
-        self.stat = stat
-        self.hub = hub
-        self._enable_turn_on_off_backwards_compatibility = False
+
+    @property
+    def stat(self) -> HeatmiserStat:
+        """Return the latest data for this stat."""
+        return self.coordinator.data[self._stat_name]
 
     @property
     def name(self):
         """Return the name of the thermostat, if any."""
-        return self.stat.name
+        return self._stat_name
 
     @property
     def unique_id(self):
         """Return a unique ID."""
-        return self.stat.id
+        return self._stat_id
 
     @property
-    def temperature_unit(self):
+    def native_temperature_unit(self):
         """Return the unit of measurement which this thermostat uses."""
         return UnitOfTemperature.CELSIUS
 
     @property
-    def current_temperature(self):
+    def native_current_temperature(self):
         """Return the current temperature."""
         return self.stat.current_temperature
 
     @property
-    def target_temperature(self):
+    def native_target_temperature(self):
         """Return the temperature we try to reach."""
         return self.stat.target_temperature
 
@@ -123,8 +101,8 @@ class HeatmiserClimate(ClimateEntity):
 
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
-        await self.hub.set_temperature_async(self.stat.name, kwargs["temperature"])
-        await self.async_update()
+        await self.hub.set_temperature_async(self._stat_name, kwargs["temperature"])
+        await self.coordinator.async_request_refresh()
 
     @property
     def hvac_action(self):
@@ -142,17 +120,19 @@ class HeatmiserClimate(ClimateEntity):
         return self._hvac_modes
 
     async def async_turn_on(self):
-        await self.hub.set_mode_async(self.stat.name, HVACMode.HEAT)
-        await self.async_update()
+        """Turn the heating on."""
+        await self.hub.set_mode_async(self._stat_name, HVACMode.HEAT)
+        await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self):
-        await self.hub.set_mode_async(self.stat.name, HVACMode.OFF)
-        await self.async_update()
+        """Turn the heating off."""
+        await self.hub.set_mode_async(self._stat_name, HVACMode.OFF)
+        await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode) -> None:
         """Set HVAC mode."""
-        await self.hub.set_mode_async(self.stat.name, hvac_mode)
-        await self.async_update()
+        await self.hub.set_mode_async(self._stat_name, hvac_mode)
+        await self.coordinator.async_request_refresh()
 
     async def async_set_time(self) -> None:
         """Set the time."""
@@ -166,16 +146,9 @@ class HeatmiserClimate(ClimateEntity):
         """Set away."""
         await self.hub.set_away_async()
 
-    async def async_set_holiday(self,start_date_time,end_date_time) -> None:
+    async def async_set_holiday(self, start_date_time, end_date_time) -> None:
         """Set a holiday."""
-        await self.hub.set_holiday_async(start_date_time,end_date_time)
-
-    async def async_update(self) -> None:
-        """Retrieve latest state."""
-        new_stat_state = await self.hub.get_device_status_async(self.stat.name)
-        if new_stat_state.current_temperature != None:
-            new_stat_state.id = self.stat.id
-            self.stat = new_stat_state
+        await self.hub.set_holiday_async(start_date_time, end_date_time)
 
     @property
     def device_info(self) -> DeviceInfo:
