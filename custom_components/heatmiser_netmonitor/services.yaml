@@ -7,7 +7,7 @@ set_system_time:
 
 boost_hot_water:
   name: Boost Hotwater
-  description: Set the boost mode ON defining the period of time for the boost.
+  description: Boost the hot water for a number of hours.
   fields:
     entity_id:
       name: Entity ID
@@ -17,13 +17,19 @@ boost_hot_water:
         entity:
           integration: heatmiser_netmonitor
           domain: water_heater
-    time_period:
-      name: Time Period
-      description: Set the time period for the boost.
+    hours:
+      name: Hours
+      description: How long to boost the hot water, in whole hours. Use 0 to cancel the boost.
       required: true
-      example: 01:00:00
+      default: 1
+      example: 2
       selector:
-        time:
+        number:
+          min: 0
+          max: 99
+          step: 1
+          mode: box
+          unit_of_measurement: hours
 
 set_holiday:
   name: Set Holiday
@@ -109,10 +115,16 @@ hold_temperature:
           max: 35
           step: 1
           unit_of_measurement: "°C"
-    time_period:
-      name: Time Period
-      description: How long to hold the temperature, in whole hours.
+    hours:
+      name: Hours
+      description: How long to hold the temperature, in whole hours. Use 0 to cancel the hold.
       required: true
-      example: 02:00:00
+      default: 1
+      example: 2
       selector:
-        time:
+        number:
+          min: 0
+          max: 99
+          step: 1
+          mode: box
+          unit_of_measurement: hours

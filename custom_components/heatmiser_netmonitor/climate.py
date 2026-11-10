@@ -59,9 +59,7 @@ async def async_setup_entry(
         cv.make_entity_service_schema(
             {
                 vol.Required("temperature"): TEMPERATURE,
-                vol.Optional("time_period", default="01:00:00"): vol.All(
-                    HOURS, vol.Range(min=1, max=99)
-                ),
+                vol.Optional("hours", default=1): HOURS,
             },
         ),
         "async_hold_temperature",
@@ -172,9 +170,9 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
         await self.hub.boost_heating_async(self._stat_index, temperature)
         await self.coordinator.async_request_refresh()
 
-    async def async_hold_temperature(self, temperature, time_period) -> None:
+    async def async_hold_temperature(self, temperature, hours) -> None:
         """Hold a temperature for a period of time."""
-        await self.hub.hold_temperature_async(self._stat_index, temperature, time_period)
+        await self.hub.hold_temperature_async(self._stat_index, temperature, hours)
         await self.coordinator.async_request_refresh()
 
     async def async_setback_heating(self) -> None:

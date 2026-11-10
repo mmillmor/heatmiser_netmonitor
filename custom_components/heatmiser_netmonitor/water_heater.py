@@ -38,7 +38,7 @@ async def async_setup_entry(
     platform.async_register_entity_service(
         "boost_hot_water",
         {
-            vol.Optional("time_period", default="01:00:00"): HOURS,
+            vol.Optional("hours", default=1): HOURS,
         },
         "async_hot_water_boost",
     )
@@ -112,9 +112,9 @@ class HeatmiserWaterHeater(CoordinatorEntity[HeatmiserCoordinator], WaterHeaterE
             await self.hub.set_boost_async(self._stat_name, 0)
         await self.coordinator.async_request_refresh()
 
-    async def async_hot_water_boost(self, time_period):
+    async def async_hot_water_boost(self, hours):
         """Handle the service call."""
-        await self.hub.set_boost_async(self._stat_name, time_period)
+        await self.hub.set_boost_async(self._stat_name, hours)
         await self.coordinator.async_request_refresh()
 
     @property
