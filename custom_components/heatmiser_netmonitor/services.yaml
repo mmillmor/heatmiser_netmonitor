@@ -59,3 +59,60 @@ set_away:
   target:
     entity:
       domain: climate
+
+boost_heating:
+  name: Boost Heating
+  description: Boost the heating on a thermostat to a set temperature.
+  target:
+    entity:
+      integration: heatmiser_netmonitor
+      domain: climate
+  fields:
+    temperature:
+      name: Temperature
+      description: Temperature to boost to.
+      required: true
+      default: 21
+      example: 22
+      selector:
+        number:
+          min: 5
+          max: 35
+          step: 1
+          unit_of_measurement: "°C"
+
+setback_heating:
+  name: Setback Heating
+  description: Set a thermostat back (frost protection).
+  target:
+    entity:
+      integration: heatmiser_netmonitor
+      domain: climate
+
+hold_temperature:
+  name: Hold Temperature
+  description: Hold a thermostat at a temperature for a period of time.
+  target:
+    entity:
+      integration: heatmiser_netmonitor
+      domain: climate
+  fields:
+    temperature:
+      name: Temperature
+      description: Temperature to hold.
+      required: true
+      default: 21
+      example: 21
+      selector:
+        number:
+          min: 5
+          max: 35
+          step: 1
+          unit_of_measurement: "°C"
+    time_period:
+      name: Time Period
+      description: How long to hold the temperature, in whole hours.
+      required: true
+      example: 02:00:00
+      selector:
+        time:

@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import HeatmiserConfigEntry, HeatmiserCoordinator
 from .heatmiser_hub import HeatmiserStat
+from .schemas import HOURS, TEMPERATURE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,6 +44,33 @@ async def async_setup_entry(
         "async_set_holiday",
     )
 
+    platform.async_register_entity_service(
+        "boost_heating",
+        cv.make_entity_service_schema(
+            {
+                vol.Required("temperature"): TEMPERATURE,
+            },
+        ),
+        "async_boost_heating",
+    )
+
+    platform.async_register_entity_service(
+        "hold_temperature",
+        cv.make_entity_service_schema(
+            {
+                vol.Required("temperature"): TEMPERATURE,
+                vol.Optional("time_period", default="01:00:00"): vol.All(
+                    HOURS, vol.Range(min=1, max=99)
+                ),
+            },
+        ),
+        "async_hold_temperature",
+    )
+
+    platform.async_register_entity_service(
+        "setback_heating", {}, "async_setback_heating"
+    )
+
     platform.async_register_entity_service("set_home", {}, "async_set_home")
 
     platform.async_register_entity_service("set_away", {}, "async_set_away")
@@ -56,6 +84,7 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
         super().__init__(coordinator)
         self._stat_name = stat.name
         self._stat_id = str(stat.id)
+        self._stat_index = stat.id
         self.hub = coordinator.hub
         self._attr_supported_features = (
             ClimateEntityFeature.TARGET_TEMPERATURE
@@ -137,6 +166,21 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
     async def async_set_time(self) -> None:
         """Set the time."""
         await self.hub.set_time_async()
+
+    async def async_boost_heating(self, temperature) -> None:
+        """Boost the heating to a temperature."""
+        await self.hub.boost_heating_async(self._stat_index, temperature)
+        await self.coordinator.async_request_refresh()
+
+    async def async_hold_temperature(self, temperature, time_period) -> None:
+        """Hold a temperature for a period of time."""
+        await self.hub.hold_temperature_async(self._stat_index, temperature, time_period)
+        await self.coordinator.async_request_refresh()
+
+    async def async_setback_heating(self) -> None:
+        """Set the heating back."""
+        await self.hub.setback_heating_async(self._stat_index)
+        await self.coordinator.async_request_refresh()
 
     async def async_set_home(self) -> None:
         """Set home."""

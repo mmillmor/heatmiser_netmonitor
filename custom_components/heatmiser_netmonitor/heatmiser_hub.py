@@ -22,6 +22,13 @@ from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
+# Number of stat positions in the NetMonitor's quick-set bitmap.
+QUICKSET_SLOTS = 32
+# Commands are repeated because communication with the stats is unreliable.
+SEND_ATTEMPTS = 10
+# Seconds to wait for the NetMonitor to answer a request.
+REQUEST_TIMEOUT = 10
+
 
 class HeatmiserStat:
     """Utility class for Heatmiser NetMonitor stats."""
@@ -63,14 +70,58 @@ class HeatmiserHub:
         # requests must not interleave.
         self._lock = asyncio.Lock()
 
+    def _get(self, page):
+        """GET a NetMonitor page."""
+        return requests.get(
+            "http://" + self.host + "/" + page,
+            auth=HTTPBasicAuth(self.username, self.password),
+            timeout=REQUEST_TIMEOUT,
+        )
+
+    def _post(self, page, data):
+        """POST a form to a NetMonitor page."""
+        return requests.post(
+            "http://" + self.host + "/" + page,
+            data=data,
+            auth=HTTPBasicAuth(self.username, self.password),
+            timeout=REQUEST_TIMEOUT,
+        )
+
+    def _send_repeatedly(self, send):
+        """Call send() several times, as communication with the stats is unreliable.
+
+        Individual failures are logged; an error is raised only if every
+        attempt fails.
+        """
+        sent = 0
+        last_error = None
+        for attempt in range(SEND_ATTEMPTS):
+            if attempt:
+                time.sleep(1)
+            try:
+                send()
+                sent += 1
+            except requests.RequestException as err:
+                last_error = err
+                _LOGGER.warning(
+                    "Attempt %d of %d failed: %s", attempt + 1, SEND_ATTEMPTS, err
+                )
+        if not sent:
+            raise last_error
+
+    def _set_stat_value(self, name, data):
+        """Select a stat, then send it a setting, repeating to make sure it lands."""
+
+        def send():
+            if self._post("right.htm", {"rdbkck": "1", "curSelStat": name}).status_code == 200:
+                self._post("right.htm", data)
+
+        self._send_repeatedly(send)
+
     def async_auth(self) -> bool:
         """Validate the username, password and host."""
 
-        response = requests.get(
-            "http://" + self.host + "/quickview.htm",
-            auth=HTTPBasicAuth(self.username, self.password),
-            timeout=10,
-        )
+        response = self._get("quickview.htm")
         if response.status_code in (401, 403):
             return False
         response.raise_for_status()
@@ -86,10 +137,7 @@ class HeatmiserHub:
     def set_time(self):
         """Get the networkSetup."""
 
-        response = requests.get(
-            "http://" + self.host + "/networkSetup.htm",
-            auth=HTTPBasicAuth(self.username, self.password),
-        )
+        response = self._get("networkSetup.htm")
 
         if response.status_code == 200:
             content = response.content.decode("utf-8")
@@ -116,11 +164,7 @@ class HeatmiserHub:
 		    ,"gmtflag":1
 		    ,"pin":pin}
 
-            response = requests.post(
-		    "http://" + self.host + "/networkSetup.htm",
-		    data=postData,
-		    auth=HTTPBasicAuth(self.username, self.password),
-            )
+            self._post("networkSetup.htm", postData)
     
     async def set_time_async(self):
         """Set the time asynchronously."""
@@ -129,20 +173,7 @@ class HeatmiserHub:
 
     def set_boost(self, name, hours):
         """Set a hot water boost time."""
-
-        for _ in range(10):
-            response = requests.post(
-                "http://" + self.host + "/right.htm",
-                data={"rdbkck": "1", "curSelStat": name},
-                auth=HTTPBasicAuth(self.username, self.password),
-            )
-            if response.status_code == 200:
-                response = requests.post(
-                    "http://" + self.host + "/right.htm",
-                    data={"hwBoost": '{0:02d}'.format(int(hours))},
-                    auth=HTTPBasicAuth(self.username, self.password),
-                )
-            time.sleep(1)
+        self._set_stat_value(name, {"hwBoost": '{0:02d}'.format(int(hours))})
     
     async def set_boost_async(self,name,hours):
         """Set the time asynchronously."""
@@ -152,19 +183,14 @@ class HeatmiserHub:
 
     def set_holiday(self, start_date_time, end_date_time):
         """Set a holiday."""
-        requests.post(
-            "http://" + self.host + "/holiday.htm",
-            data={
-                "rdbkck": "0",
-                "starttime": start_date_time.strftime("%H.%M"),
-                "startdate": start_date_time.strftime("%d.%m.%y"),
-                "endtime": end_date_time.strftime("%H.%M"),
-                "enddate": end_date_time.strftime("%d.%m.%y"),
-                "actHoliday": "1",
-            },
-            auth=HTTPBasicAuth(self.username, self.password),
-            timeout=10,
-        )
+        self._post("holiday.htm", {
+            "rdbkck": "0",
+            "starttime": start_date_time.strftime("%H.%M"),
+            "startdate": start_date_time.strftime("%d.%m.%y"),
+            "endtime": end_date_time.strftime("%H.%M"),
+            "enddate": end_date_time.strftime("%d.%m.%y"),
+            "actHoliday": "1",
+        })
 
     async def set_holiday_async(self, start_date_time, end_date_time):
         """Set a holiday asynchronously."""
@@ -176,19 +202,14 @@ class HeatmiserHub:
     def set_home(self, home_away):
         """Set home ("0") or away ("2") mode."""
         start_date_time = datetime.now()
-        requests.post(
-            "http://" + self.host + "/holiday.htm",
-            data={
-                "rdbkck": "0",
-                "starttime": start_date_time.strftime("%H.%M"),
-                "startdate": start_date_time.strftime("%d.%m.%y"),
-                "endtime": start_date_time.strftime("%H.%M"),
-                "enddate": start_date_time.strftime("%d.%m.%y"),
-                "actHoliday": home_away,
-            },
-            auth=HTTPBasicAuth(self.username, self.password),
-            timeout=10,
-        )
+        self._post("holiday.htm", {
+            "rdbkck": "0",
+            "starttime": start_date_time.strftime("%H.%M"),
+            "startdate": start_date_time.strftime("%d.%m.%y"),
+            "endtime": start_date_time.strftime("%H.%M"),
+            "enddate": start_date_time.strftime("%d.%m.%y"),
+            "actHoliday": home_away,
+        })
 
     async def set_home_async(self):
         """Set home mode asynchronously."""
@@ -200,15 +221,74 @@ class HeatmiserHub:
         async with self._lock:
             return await self.hass.async_add_executor_job(self.set_home, "2")
 
+    @staticmethod
+    def _stat_map(stat_index):
+        """Return the NetMonitor's 32-character stat bitmap with one stat set."""
+        if not 0 <= stat_index < QUICKSET_SLOTS:
+            raise ValueError(f"Stat index {stat_index} is outside the stat map")
+        return "".join(
+            "1" if slot == stat_index else "0" for slot in range(QUICKSET_SLOTS)
+        )
+
+    def boost_heating(self, stat_index, temperature):
+        """Boost a stat to a temperature using the quick-set form."""
+        data = {
+            "rdbkck": "2",
+            "quickSet": str(int(round(temperature))),
+            "quickSetMap": self._stat_map(stat_index),
+            "quickSetGrp": "0",
+            "quickSetAct": "1",
+        }
+        self._send_repeatedly(lambda: self._post("tempset.htm", data))
+
+    async def boost_heating_async(self, stat_index, temperature):
+        """Boost heating asynchronously."""
+        async with self._lock:
+            return await self.hass.async_add_executor_job(
+                self.boost_heating, stat_index, temperature
+            )
+
+    def hold_temperature(self, stat_index, temperature, hours):
+        """Hold a stat at a temperature for a number of hours."""
+        data = {
+            "rdbkck": "1",
+            "tempholdTemp": str(int(round(temperature))),
+            "tempholdTime": "{0:02d}".format(int(hours)),
+            "tempholdMap": self._stat_map(stat_index),
+            "tempholdGrp": "0",
+            "tempholdAct": "1",
+        }
+        self._send_repeatedly(lambda: self._post("temphold.htm", data))
+
+    async def hold_temperature_async(self, stat_index, temperature, hours):
+        """Hold a temperature asynchronously."""
+        async with self._lock:
+            return await self.hass.async_add_executor_job(
+                self.hold_temperature, stat_index, temperature, hours
+            )
+
+    def setback_heating(self, stat_index):
+        """Set a stat back using the frost form."""
+        data = {
+            "rdbkck": "2",
+            "frostMap": self._stat_map(stat_index),
+            "frostGrp": "0",
+            "frostAct": "1",
+        }
+        self._send_repeatedly(lambda: self._post("frost.htm", data))
+
+    async def setback_heating_async(self, stat_index):
+        """Set back heating asynchronously."""
+        async with self._lock:
+            return await self.hass.async_add_executor_job(
+                self.setback_heating, stat_index
+            )
+
     def get_devices(self):
         """Get the list of devices."""
 
         device_list = []
-        response = requests.get(
-            "http://" + self.host + "/quickview.htm",
-            auth=HTTPBasicAuth(self.username, self.password),
-            timeout=10,
-        )
+        response = self._get("quickview.htm")
         if response.status_code == 200:
             content = response.content.decode("utf-8")
             statnames = content.split('statname" value="')[1].split('"')[0].split("#")
@@ -268,19 +348,7 @@ class HeatmiserHub:
     def set_temperature(self, name, target_temperature):
         """Set a device target temperature."""
 
-        for _ in range(10):
-            response = requests.post(
-                "http://" + self.host + "/right.htm",
-                data={"rdbkck": "1", "curSelStat": name},
-                auth=HTTPBasicAuth(self.username, self.password),
-            )
-            if response.status_code == 200:
-                response = requests.post(
-                    "http://" + self.host + "/right.htm",
-                    data={"selSetTemp": str(int(target_temperature))},
-                    auth=HTTPBasicAuth(self.username, self.password),
-                )
-            time.sleep(1)
+        self._set_stat_value(name, {"selSetTemp": str(int(target_temperature))})
 
     async def set_temperature_async(self, name, target_temperature):
         """Set a device target temperature asynchronously."""
@@ -294,19 +362,7 @@ class HeatmiserHub:
         mode = "0"
         if hvac_mode == HVACMode.OFF:
             mode = "1"
-        for _ in range(10):
-            response = requests.post(
-                "http://" + self.host + "/right.htm",
-                data={"rdbkck": "1", "curSelStat": name},
-                auth=HTTPBasicAuth(self.username, self.password),
-            )
-            if response.status_code == 200:
-                response = requests.post(
-                    "http://" + self.host + "/right.htm",
-                    data={"selFrost": mode},
-                    auth=HTTPBasicAuth(self.username, self.password),
-                )
-            time.sleep(1)
+        self._set_stat_value(name, {"selFrost": mode})
 
     async def set_mode_async(self, name, hvac_mode):
         """Set a device target mode asynchronously."""
@@ -318,12 +374,7 @@ class HeatmiserHub:
     def get_device_status(self, name) -> HeatmiserStat:
         """Get the device status."""
 
-        response = requests.post(
-            "http://" + self.host + "/right.htm",
-            data={"rdbkck": "0", "curSelStat": name},
-            auth=HTTPBasicAuth(self.username, self.password),
-            timeout=10,
-        )
+        response = self._post("right.htm", {"rdbkck": "0", "curSelStat": name})
         if response.status_code == 200:
             content = response.content.decode("utf-8")
             statvals = content.split('statInfo" value="')[1].split('"')[0]

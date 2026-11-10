@@ -3,6 +3,9 @@ Integrate a Heatmiser Netmonitor heating system with Home Assistant.
 This integration offers thermostat and hot water control. It also has the following services;
 
 1. Hot water boost - this will boost the hot water for the specified time
+1. Boost heating - this will boost a thermostat to the temperature you specify
+1. Hold temperature - this will hold a thermostat at a temperature for the number of hours you specify
+1. Setback heating - this will set a thermostat back
 1. Set time - this will set the system time to the current time. Note, you must call this for one entity, but it will update the whole system when you do
 1. Set Holiday - this allows you to set and unset a holiday
 1. Set Home - set mode to Home

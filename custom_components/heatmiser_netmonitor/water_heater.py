@@ -10,13 +10,14 @@ from homeassistant.components.water_heater import (
 )
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv, entity_platform
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import HeatmiserConfigEntry, HeatmiserCoordinator
 from .heatmiser_hub import HeatmiserStat
+from .schemas import HOURS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,11 +38,7 @@ async def async_setup_entry(
     platform.async_register_entity_service(
         "boost_hot_water",
         {
-            vol.Optional("time_period", default="01:00:00"): vol.All(
-                cv.time_period,
-                cv.positive_timedelta,
-                lambda td: td.total_seconds() // 3600,
-            ),
+            vol.Optional("time_period", default="01:00:00"): HOURS,
         },
         "async_hot_water_boost",
     )
