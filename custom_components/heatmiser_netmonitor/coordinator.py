@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
 import time
@@ -63,6 +63,10 @@ class Tracked:
     # current != target: changing back to the old value while a change is
     # still in flight makes them equal, but that still needs delivering.
     in_flight: bool = False
+    # Every value sent since the stat was last settled. While a change is in
+    # flight the stat may read any of these (an older one still echoing), and
+    # only a value outside them is a change made outside Home Assistant.
+    sent: set = field(default_factory=set)
 
     @property
     def settled(self) -> bool:
@@ -71,6 +75,7 @@ class Tracked:
     def adopt(self, reading) -> None:
         self.current = self.target = reading
         self.in_flight = False
+        self.sent = set()
 
 
 type HeatmiserConfigEntry = ConfigEntry[HeatmiserCoordinator]
@@ -85,7 +90,7 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
 
     - settled (not in flight) and the reading differs: someone changed
       the stat (at the thermostat, or its program did); adopt the reading.
-    - in flight and the reading is neither current nor target: likewise,
+    - in flight and the reading is neither current nor anything sent: likewise,
       that change wins.
     - in flight, less than SETTLE_AFTER since the last send: resend once per
       round, on a timer; otherwise wait, since the
@@ -146,6 +151,7 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
             self.tracked[key] = tracked
         tracked.target = value
         tracked.in_flight = True
+        tracked.sent.add(value)
         tracked.rounds = 1
         tracked.sends_this_round = 1
         tracked.last_sent = _now()
@@ -193,7 +199,7 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
                     tracked.adopt(reading)
                 continue
 
-            if reading not in (tracked.current, tracked.target):
+            if reading != tracked.current and reading not in tracked.sent:
                 _LOGGER.info(
                     "%s %s changed to %s outside Home Assistant while %s was being "
                     "sent; keeping %s",

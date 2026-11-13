@@ -156,3 +156,20 @@ async def test_changing_back_before_confirmed_is_still_delivered(hass, netmonito
     await poll(hass, entry, clock, 91)
     assert tracked(entry).settled and tracked(entry).current == 14
     assert hass.states.get("climate.living_room").attributes["temperature"] == 14
+
+
+
+async def test_reversing_a_landed_change_doesnt_bounce(hass, netmonitor, clock):
+    """Changing back while the first change still reads on the stat doesn't bounce.
+
+    The stat reads 18 (the first change), current and target are both 14; 18
+    was sent by us, so it mustn't be taken for a change at the thermostat.
+    """
+    entry = await setup(hass)
+    netmonitor._apply_if_repeated = lambda *a: False   # nothing lands from now on
+    netmonitor.targets[4] = 18                          # first change has landed
+    await set_temp(hass, "climate.living_room", 18)
+    await set_temp(hass, "climate.living_room", 14)     # change back straight away
+    await poll(hass, entry, clock, 1)                   # reads 18
+    assert hass.states.get("climate.living_room").attributes["temperature"] == 14
+    assert not tracked(entry).settled
