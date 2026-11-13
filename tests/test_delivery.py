@@ -140,3 +140,19 @@ async def test_several_rooms_at_once(hass, netmonitor, clock):
     assert all(t.settled for t in entry.runtime_data.tracked.values())
     assert hass.states.get("climate.study").state == "off"
     assert hass.states.get("climate.hall").state == "heat"
+
+
+async def test_changing_back_before_confirmed_is_still_delivered(hass, netmonitor, clock):
+    """Going back to the old value while a change is in flight still gets sent."""
+    entry = await setup(hass)
+    await set_temp(hass, "climate.living_room", 18)
+    await resend_done(hass)
+    assert netmonitor.targets[4] == 18              # landed, not yet confirmed
+    await set_temp(hass, "climate.living_room", 14)  # back to the old value
+    assert hass.states.get("climate.living_room").attributes["temperature"] == 14
+    await resend_done(hass)
+    assert len(sends(netmonitor, "selSetTemp=14")) == N
+    assert netmonitor.targets[4] == 14
+    await poll(hass, entry, clock, 91)
+    assert tracked(entry).settled and tracked(entry).current == 14
+    assert hass.states.get("climate.living_room").attributes["temperature"] == 14

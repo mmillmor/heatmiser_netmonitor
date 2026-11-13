@@ -59,10 +59,18 @@ class Tracked:
     # Identifies the current round, so a timed resend from an older round or
     # an older target does nothing.
     round_id: int = 0
+    # True from a change until it's confirmed or given up on. Not simply
+    # current != target: changing back to the old value while a change is
+    # still in flight makes them equal, but that still needs delivering.
+    in_flight: bool = False
 
     @property
     def settled(self) -> bool:
-        return self.current == self.target
+        return not self.in_flight
+
+    def adopt(self, reading) -> None:
+        self.current = self.target = reading
+        self.in_flight = False
 
 
 type HeatmiserConfigEntry = ConfigEntry[HeatmiserCoordinator]
@@ -75,7 +83,7 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
     changed, it keeps the value the stat is known to have (current) and the
     value wanted (target). On each poll:
 
-    - settled (current == target) and the reading differs: someone changed
+    - settled (not in flight) and the reading differs: someone changed
       the stat (at the thermostat, or its program did); adopt the reading.
     - in flight and the reading is neither current nor target: likewise,
       that change wins.
@@ -137,6 +145,7 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
             tracked = Tracked(current=self._reading(stat, kind) if stat else None, target=value)
             self.tracked[key] = tracked
         tracked.target = value
+        tracked.in_flight = True
         tracked.rounds = 1
         tracked.sends_this_round = 1
         tracked.last_sent = _now()
@@ -181,7 +190,7 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
                     _LOGGER.info(
                         "%s %s changed to %s outside Home Assistant", name, kind, reading
                     )
-                    tracked.current = tracked.target = reading
+                    tracked.adopt(reading)
                 continue
 
             if reading not in (tracked.current, tracked.target):
@@ -190,7 +199,7 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
                     "sent; keeping %s",
                     name, kind, reading, tracked.target, reading,
                 )
-                tracked.current = tracked.target = reading
+                tracked.adopt(reading)
                 continue
 
             since = now - tracked.last_sent
@@ -202,7 +211,7 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
                     "%s %s %s confirmed after %d round(s)",
                     name, kind, tracked.target, tracked.rounds,
                 )
-                tracked.current = reading
+                tracked.adopt(reading)
                 continue
 
             if tracked.rounds >= MAX_ROUNDS:
@@ -210,7 +219,7 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
                     "%s %s %s didn't stick after %d rounds; it reads %s",
                     name, kind, tracked.target, tracked.rounds, reading,
                 )
-                tracked.current = tracked.target = reading
+                tracked.adopt(reading)
                 continue
 
             _LOGGER.warning(
