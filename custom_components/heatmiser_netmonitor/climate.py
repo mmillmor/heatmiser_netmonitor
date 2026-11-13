@@ -158,8 +158,12 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     @property
     def target_temperature(self):
-        """Return the temperature we try to reach."""
-        return self.stat.target_temperature
+        """Return the temperature we try to reach.
+
+        While a change is being delivered, show the requested value rather than
+        what the NetMonitor last reported.
+        """
+        return self._wanted(KIND_TEMPERATURE, self.stat.target_temperature)
 
     @property
     def target_temperature_step(self):
@@ -169,6 +173,7 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
         await self._call(self.coordinator.async_set(self._stat_name, KIND_TEMPERATURE, kwargs["temperature"]))
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
     @property
@@ -178,8 +183,18 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     @property
     def hvac_mode(self):
-        """Return current operation ie. heat, cool, idle."""
-        return self.stat.hvac_mode
+        """Return current operation ie. heat, cool, idle.
+
+        While a change is being delivered, show the requested mode.
+        """
+        return self._wanted(KIND_MODE, self.stat.hvac_mode)
+
+    def _wanted(self, kind, reading):
+        """Return the value being delivered, if any, otherwise the reading."""
+        tracked = self.coordinator.tracked.get((self._stat_name, kind))
+        if tracked is not None and not tracked.settled:
+            return tracked.target
+        return reading
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
@@ -189,16 +204,19 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
     async def async_turn_on(self):
         """Turn the heating on."""
         await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.HEAT))
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self):
         """Turn the heating off."""
         await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.OFF))
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode) -> None:
         """Set HVAC mode."""
         await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, hvac_mode))
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
     async def async_set_time(self) -> None:
@@ -218,6 +236,7 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
     async def async_setback_heating(self) -> None:
         """Set the heating back."""
         await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.OFF))
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
     async def async_test_send(

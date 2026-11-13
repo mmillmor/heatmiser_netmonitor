@@ -24,6 +24,8 @@ async def test_resend_then_confirm(hass, netmonitor, clock):
     await set_temp(hass, "climate.living_room", 18)
     assert len(sends(netmonitor, "selSetTemp=18")) == 1
     assert netmonitor.targets[4] == 14              # one send doesn't stick
+    # The UI shows the requested value straight away.
+    assert hass.states.get("climate.living_room").attributes["temperature"] == 18
 
     await poll(hass, entry, clock, 15)              # too soon to resend
     assert len(sends(netmonitor, "selSetTemp=18")) == 1
@@ -70,6 +72,8 @@ async def test_gives_up_after_three_rounds(hass, netmonitor, clock):
     tracked = entry.runtime_data.tracked[("Living Room", "temperature")]
     assert len(sends(netmonitor, "selSetTemp=22")) == 6
     assert tracked.settled and tracked.current == 14     # adopts what it reads
+    # and the UI shows what the thermostat really is again.
+    assert hass.states.get("climate.living_room").attributes["temperature"] == 14
     await poll(hass, entry, clock, 200)
     assert len(sends(netmonitor, "selSetTemp=22")) == 6  # and stops sending
 
@@ -115,6 +119,7 @@ async def test_several_rooms_at_once(hass, netmonitor, clock):
             "climate", "set_hvac_mode", {"entity_id": entity, "hvac_mode": mode},
             blocking=True,
         )
+        assert hass.states.get(entity).state == mode   # shown straight away
     await set_temp(hass, "climate.living_room", 20)
     await poll(hass, entry, clock, 31)
     await poll(hass, entry, clock, 91)
