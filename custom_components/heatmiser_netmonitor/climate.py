@@ -1,13 +1,14 @@
 """Climate module for the Heatmiser NetMonitor integration."""
 import logging
 
+import requests
 import voluptuous as vol
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, SupportsResponse
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -82,6 +83,7 @@ async def async_setup_entry(
                 vol.Optional("gap", default=0): vol.All(
                     vol.Coerce(float), vol.Range(min=0, max=600)
                 ),
+                vol.Optional("method", default="select"): vol.In(["select", "map"]),
             },
         ),
         "async_test_send",
@@ -89,7 +91,12 @@ async def async_setup_entry(
     )
 
     platform.async_register_entity_service(
-        "test_poll", {}, "async_test_poll", supports_response=SupportsResponse.ONLY
+        "test_poll",
+        cv.make_entity_service_schema(
+            {vol.Optional("method", default="select"): vol.In(["select", "bulk"])}
+        ),
+        "async_test_poll",
+        supports_response=SupportsResponse.ONLY,
     )
 
     platform.async_register_entity_service("set_home", {}, "async_set_home")
@@ -114,6 +121,19 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
         )
         self._hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
 
+    async def _call(self, coro):
+        """Await a hub call, reporting NetMonitor failures as HomeAssistantError.
+
+        A raw requests exception shows up in automations as an "unexpected
+        error", which continue_on_error can't skip.
+        """
+        try:
+            return await coro
+        except (requests.RequestException, ValueError, IndexError) as err:
+            raise HomeAssistantError(
+                f"Couldn't reach {self._stat_name} through the NetMonitor: {err}"
+            ) from err
+
     @property
     def stat(self) -> HeatmiserStat:
         """Return the latest data for this stat."""
@@ -129,18 +149,15 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
         """Return a unique ID."""
         return self._stat_id
 
-    @property
-    def native_temperature_unit(self):
-        """Return the unit of measurement which this thermostat uses."""
-        return UnitOfTemperature.CELSIUS
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
 
     @property
-    def native_current_temperature(self):
+    def current_temperature(self):
         """Return the current temperature."""
         return self.stat.current_temperature
 
     @property
-    def native_target_temperature(self):
+    def target_temperature(self):
         """Return the temperature we try to reach."""
         return self.stat.target_temperature
 
@@ -151,7 +168,7 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
-        await self.hub.set_temperature_async(self._stat_name, kwargs["temperature"])
+        await self._call(self.hub.set_temperature_async(self._stat_name, kwargs["temperature"]))
         await self.coordinator.async_request_refresh()
 
     @property
@@ -171,67 +188,74 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     async def async_turn_on(self):
         """Turn the heating on."""
-        await self.hub.set_mode_async(self._stat_name, HVACMode.HEAT)
+        await self._call(self.hub.set_mode_async(self._stat_name, HVACMode.HEAT))
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self):
         """Turn the heating off."""
-        await self.hub.set_mode_async(self._stat_name, HVACMode.OFF)
+        await self._call(self.hub.set_mode_async(self._stat_name, HVACMode.OFF))
         await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode) -> None:
         """Set HVAC mode."""
-        await self.hub.set_mode_async(self._stat_name, hvac_mode)
+        await self._call(self.hub.set_mode_async(self._stat_name, hvac_mode))
         await self.coordinator.async_request_refresh()
 
     async def async_set_time(self) -> None:
         """Set the time."""
-        await self.hub.set_time_async()
+        await self._call(self.hub.set_time_async())
 
     async def async_boost_heating(self, temperature) -> None:
         """Boost the heating to a temperature."""
-        await self.hub.boost_heating_async(self._stat_index, temperature)
+        await self._call(self.hub.boost_heating_async(self._stat_index, temperature))
         await self.coordinator.async_request_refresh()
 
     async def async_hold_temperature(self, temperature, hours) -> None:
         """Hold a temperature for a period of time."""
-        await self.hub.hold_temperature_async(self._stat_index, temperature, hours)
+        await self._call(self.hub.hold_temperature_async(self._stat_index, temperature, hours))
         await self.coordinator.async_request_refresh()
 
     async def async_setback_heating(self) -> None:
         """Set the heating back."""
-        await self.hub.setback_heating_async(self._stat_index)
+        await self._call(self.hub.setback_heating_async(self._stat_index))
         await self.coordinator.async_request_refresh()
 
     async def async_test_send(
-        self, attempts, gap, temperature=None, hvac_mode=None
+        self, attempts, gap, method, temperature=None, hvac_mode=None
     ) -> dict:
         """Send one setting a fixed number of times, for comms testing."""
-        if temperature is not None:
-            data = {"selSetTemp": str(int(temperature))}
-        elif hvac_mode is not None:
-            data = {"selFrost": "1" if hvac_mode == "off" else "0"}
-        else:
+        if (temperature is None) == (hvac_mode is None):
             raise ServiceValidationError("Give either temperature or hvac_mode")
-        results = await self.hub.test_send_async(self._stat_name, data, attempts, gap)
-        return {"stat": self._stat_name, "sent": data, "attempts": results}
+        try:
+            result = await self.hub.test_send_async(
+                self._stat_name,
+                self._stat_index,
+                method,
+                temperature,
+                HVACMode(hvac_mode) if hvac_mode else None,
+                attempts,
+                gap,
+            )
+        except (requests.RequestException, ValueError, IndexError) as err:
+            raise HomeAssistantError(f"Test send to {self._stat_name} failed: {err}") from err
+        return {"stat": self._stat_name, **result}
 
-    async def async_test_poll(self) -> dict:
+    async def async_test_poll(self, method) -> dict:
         """Read this stat straight from the NetMonitor, for comms testing."""
-        result = await self.hub.test_poll_async(self._stat_name)
+        result = await self._call(self.hub.test_poll_async(self._stat_name, method))
         return {"stat": self._stat_name, **result}
 
     async def async_set_home(self) -> None:
         """Set home."""
-        await self.hub.set_home_async()
+        await self._call(self.hub.set_home_async())
 
     async def async_set_away(self) -> None:
         """Set away."""
-        await self.hub.set_away_async()
+        await self._call(self.hub.set_away_async())
 
     async def async_set_holiday(self, start_date_time, end_date_time) -> None:
         """Set a holiday."""
-        await self.hub.set_holiday_async(start_date_time, end_date_time)
+        await self._call(self.hub.set_holiday_async(start_date_time, end_date_time))
 
     @property
     def device_info(self) -> DeviceInfo:

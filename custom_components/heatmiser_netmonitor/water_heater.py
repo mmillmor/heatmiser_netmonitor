@@ -1,6 +1,7 @@
 """Water Heater module for the Heatmiser NetMonitor integration."""
 import logging
 
+import requests
 import voluptuous as vol
 
 from homeassistant.components.water_heater import (
@@ -10,6 +11,7 @@ from homeassistant.components.water_heater import (
 )
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -58,6 +60,19 @@ class HeatmiserWaterHeater(CoordinatorEntity[HeatmiserCoordinator], WaterHeaterE
         )
         self._attr_operation_list = [STATE_GAS, STATE_OFF]
 
+    async def _call(self, coro):
+        """Await a hub call, reporting NetMonitor failures as HomeAssistantError.
+
+        A raw requests exception shows up in automations as an "unexpected
+        error", which continue_on_error can't skip.
+        """
+        try:
+            return await coro
+        except (requests.RequestException, ValueError, IndexError) as err:
+            raise HomeAssistantError(
+                f"Couldn't reach {self._stat_name} through the NetMonitor: {err}"
+            ) from err
+
     @property
     def water_heater(self) -> HeatmiserStat:
         """Return the latest data for this stat."""
@@ -96,25 +111,25 @@ class HeatmiserWaterHeater(CoordinatorEntity[HeatmiserCoordinator], WaterHeaterE
 
     async def async_turn_on(self, **kwargs):
         """Turn on hotwater."""
-        await self.hub.set_boost_async(self._stat_name, 24)
+        await self._call(self.hub.set_boost_async(self._stat_name, 24))
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs):
         """Turn off hotwater."""
-        await self.hub.set_boost_async(self._stat_name, 0)
+        await self._call(self.hub.set_boost_async(self._stat_name, 0))
         await self.coordinator.async_request_refresh()
 
     async def async_set_operation_mode(self, operation_mode):
         """Set operation mode."""
         if operation_mode == STATE_GAS:
-            await self.hub.set_boost_async(self._stat_name, 24)
+            await self._call(self.hub.set_boost_async(self._stat_name, 24))
         if operation_mode == STATE_OFF:
-            await self.hub.set_boost_async(self._stat_name, 0)
+            await self._call(self.hub.set_boost_async(self._stat_name, 0))
         await self.coordinator.async_request_refresh()
 
     async def async_hot_water_boost(self, hours):
         """Handle the service call."""
-        await self.hub.set_boost_async(self._stat_name, hours)
+        await self._call(self.hub.set_boost_async(self._stat_name, hours))
         await self.coordinator.async_request_refresh()
 
     @property

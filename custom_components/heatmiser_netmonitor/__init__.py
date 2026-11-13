@@ -11,7 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from .coordinator import HeatmiserConfigEntry, HeatmiserCoordinator
 from .heatmiser_hub import HeatmiserHub
 
-PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.WATER_HEATER]
+PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.SENSOR, Platform.WATER_HEATER]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: HeatmiserConfigEntry) -> bool:

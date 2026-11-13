@@ -267,14 +267,32 @@ class HeatmiserHub:
                 self.hold_temperature, stat_index, temperature, hours
             )
 
-    def setback_heating(self, stat_index):
-        """Set a stat back using the frost form."""
-        data = {
+    def _frost_map_with(self, stat_index, frost):
+        """Return the current frost map with one stat's position changed.
+
+        frost.htm applies the whole map, so a map with only one stat set would
+        take every other stat out of frost mode.
+        """
+        if not 0 <= stat_index < QUICKSET_SLOTS:
+            raise ValueError(f"Stat index {stat_index} is outside the stat map")
+        frost_state = self._get_frost_state()
+        return (
+            frost_state[:stat_index]
+            + ("1" if frost else "0")
+            + frost_state[stat_index + 1 :]
+        )
+
+    def _frost_data(self, frost_map):
+        return {
             "rdbkck": "2",
-            "frostMap": self._stat_map(stat_index),
+            "frostMap": frost_map,
             "frostGrp": "0",
             "frostAct": "1",
         }
+
+    def setback_heating(self, stat_index):
+        """Set a stat back using the frost form, leaving other stats as they are."""
+        data = self._frost_data(self._frost_map_with(stat_index, True))
         self._send_repeatedly(lambda: self._post("frost.htm", data))
 
     async def setback_heating_async(self, stat_index):
@@ -284,61 +302,126 @@ class HeatmiserHub:
                 self.setback_heating, stat_index
             )
 
+    @staticmethod
+    def _hidden(content, name):
+        """Return the value of a hidden form field on a NetMonitor page."""
+        return content.split(name + '" value="')[1].split('"')[0]
+
+    @staticmethod
+    def _temperature(text):
+        """Convert a two-character temperature, where "NC" means not communicating."""
+        return None if text == "NC" else int(text)
+
+    def _parse_quickview(self, content):
+        """Parse quickview.htm: six characters per stat position.
+
+        Characters are current temperature (2), target temperature (2),
+        heating (1) and hot water (1); stat positions follow statmap.
+        """
+        statnames = self._hidden(content, "statname").split("#")
+        quickvals = self._hidden(content, "quickview")
+        statmap = self._hidden(content, "statmap")
+        stats = []
+        for i, statname in enumerate(statnames):
+            if statmap[i : i + 1] != "1":
+                continue
+            vals = quickvals[i * 6 : i * 6 + 6]
+            hw_state = vals[5:6]
+            hw_timer_output = STATE_UNAVAILABLE
+            if hw_state == "0":
+                hw_timer_output = STATE_OFF
+            elif hw_state == "1":
+                hw_timer_output = STATE_ON
+            stats.append(
+                HeatmiserStat(
+                    i,
+                    statname,
+                    self._temperature(vals[0:2]),
+                    self._temperature(vals[2:4]),
+                    HVACMode.HEAT,
+                    HVACAction.HEATING if vals[4:5] == "1" else HVACAction.IDLE,
+                    hw_timer_output,
+                    -1,
+                )
+            )
+        return stats
+
     def get_devices(self):
         """Get the list of devices."""
-
-        device_list = []
         response = self._get("quickview.htm")
-        if response.status_code == 200:
-            content = response.content.decode("utf-8")
-            statnames = content.split('statname" value="')[1].split('"')[0].split("#")
-            quickvals = content.split('quickview" value="')[1].split('"')[0]
-            statmap = content.split('statmap" value="')[1].split('"')[0]
-            i = 0
-            for statname in statnames:
-                if (statmap[i : i + 1]) == "1":
-                    current_temperature_str = quickvals[i * 6 : i * 6 + 2]
-                    current_temperature = None
-                    if current_temperature_str != "NC":
-                        current_temperature = int(current_temperature_str)
-                    target_temperature_str = quickvals[i * 6 + 2 : i * 6 + 4]
-                    target_temperature = None
-                    if target_temperature_str != "NC":
-                        target_temperature = int(target_temperature_str)
-                    state = quickvals[i * 6 + 4 : i * 6 + 5]
-                    current_state = HVACAction.OFF
-                    if state == "1":
-                        current_state = HVACAction.HEATING
-                    hw_state = quickvals[i * 6 + 5 : i * 6 + 6]
-                    hw_timer_output = STATE_UNAVAILABLE
-                    if hw_state == "0":
-                        hw_timer_output = STATE_OFF
-                    elif hw_state == "1":
-                        hw_timer_output = STATE_ON
+        response.raise_for_status()
+        return self._parse_quickview(response.content.decode("utf-8"))
 
-                    print(
-                        statname
-                        + "("
-                        + current_temperature_str
-                        + " "
-                        + target_temperature_str
-                        + ")"
-                    )
+    def _get_frost_state(self):
+        """Return frost.htm's 32-character map of which stats are in frost mode."""
+        response = self._get("frost.htm")
+        response.raise_for_status()
+        frost_state = self._hidden(response.content.decode("utf-8"), "frostState")
+        if len(frost_state) != QUICKSET_SLOTS or set(frost_state) - {"0", "1"}:
+            raise ValueError(f"Unexpected frostState {frost_state!r}")
+        return frost_state
 
-                    device_list.append(
-                        HeatmiserStat(
-                            i,
-                            statname,
-                            current_temperature,
-                            target_temperature,
-                            HVACMode.HEAT,
-                            current_state,
-                            hw_timer_output,
-                            -1
-                        )
-                    )
-                i = i + 1
-        return device_list
+    def get_all_status(self):
+        """Read every stat with two requests: quickview.htm and frost.htm.
+
+        This replaces selecting and reading each stat in turn through
+        right.htm, which took one request per stat.
+        """
+        stats = self.get_devices()
+        frost_state = self._get_frost_state()
+        for stat in stats:
+            if frost_state[stat.id] == "1":
+                stat.hvac_mode = HVACMode.OFF
+                stat.current_state = HVACAction.OFF
+        return {stat.name: stat for stat in stats}
+
+    async def get_all_status_async(self):
+        """Read every stat asynchronously."""
+        async with self._lock:
+            return await self.hass.async_add_executor_job(self.get_all_status)
+
+    def get_comms_stats(self):
+        """Read the NetMonitor's per-stat send and receive counters.
+
+        statistics.htm holds four BCD digits per configured stat, in stat
+        order, in websendCnt and webrecvCnt; prtmap marks offline stats "!".
+        The counters are four digits, so they wrap after 9999.
+        """
+        quickview = self._get("quickview.htm")
+        quickview.raise_for_status()
+        content = quickview.content.decode("utf-8")
+        statnames = self._hidden(content, "statname").split("#")
+        statmap = self._hidden(content, "statmap")
+
+        response = self._get("statistics.htm")
+        response.raise_for_status()
+        content = response.content.decode("utf-8")
+        sent_all = self._hidden(content, "websendCnt")
+        received_all = self._hidden(content, "webrecvCnt")
+        prtmap = self._hidden(content, "prtmap")
+
+        result = {}
+        k = 0
+        for i, statname in enumerate(statnames):
+            if statmap[i : i + 1] != "1":
+                continue
+            sent = int(sent_all[k : k + 4])
+            received = int(received_all[k : k + 4])
+            k += 4
+            online = prtmap[i : i + 1] != "!"
+            result[statname] = {
+                "address": i + 1,
+                "sent": sent,
+                "received": received,
+                "rate": round(100 * received / sent, 1) if sent and online else None,
+                "online": online,
+            }
+        return result
+
+    async def get_comms_stats_async(self):
+        """Read the comms counters asynchronously."""
+        async with self._lock:
+            return await self.hass.async_add_executor_job(self.get_comms_stats)
 
     async def get_devices_async(self):
         """Get the list of devices asynchronously."""
@@ -425,37 +508,73 @@ class HeatmiserHub:
     # repeats, and read a stat back without updating the entities, so the
     # behaviour of the NetMonitor and the stat network can be measured.
 
-    def _test_send_once(self, name, data):
-        """Select a stat and send it one setting, once. Return what happened."""
+    def _test_send_once(self, name, method, data):
+        """Send one setting once, by the chosen method. Return what happened.
+
+        "select" selects the stat on right.htm, then sends the setting there
+        (two requests, as set_temperature and set_mode do). "map" sends one
+        request to tempset.htm or frost.htm, naming the stat in the map.
+        """
         result = {"time": datetime.now().isoformat(timespec="milliseconds")}
         try:
-            select = self._post("right.htm", {"rdbkck": "1", "curSelStat": name})
-            result["select_status"] = select.status_code
-            if select.status_code == 200:
-                send = self._post("right.htm", data)
+            if method == "select":
+                select = self._post("right.htm", {"rdbkck": "1", "curSelStat": name})
+                result["select_status"] = select.status_code
+                if select.status_code == 200:
+                    send = self._post("right.htm", data)
+                    result["send_status"] = send.status_code
+            else:
+                page = "frost.htm" if "frostMap" in data else "tempset.htm"
+                send = self._post(page, data)
                 result["send_status"] = send.status_code
         except requests.RequestException as err:
             result["error"] = str(err)
         result["done"] = datetime.now().isoformat(timespec="milliseconds")
         return result
 
-    async def test_send_async(self, name, data, attempts, gap):
+    def _test_data(self, stat_index, method, temperature, hvac_mode):
+        """Build the form data for a test send."""
+        if method == "select":
+            if temperature is not None:
+                return {"selSetTemp": "{0:02d}".format(int(temperature))}
+            return {"selFrost": "1" if hvac_mode == HVACMode.OFF else "0"}
+        if temperature is not None:
+            return {
+                "rdbkck": "2",
+                "quickSet": "{0:02d}".format(int(temperature)),
+                "quickSetMap": self._stat_map(stat_index),
+                "quickSetGrp": "0",
+                "quickSetAct": "1",
+            }
+        return self._frost_data(
+            self._frost_map_with(stat_index, hvac_mode == HVACMode.OFF)
+        )
+
+    async def test_send_async(
+        self, name, stat_index, method, temperature, hvac_mode, attempts, gap
+    ):
         """Send a setting a fixed number of times, gap seconds apart.
 
         The lock is released between attempts so polls can run in the gaps.
         """
+        async with self._lock:
+            data = await self.hass.async_add_executor_job(
+                self._test_data, stat_index, method, temperature, hvac_mode
+            )
         results = []
         for attempt in range(attempts):
             if attempt and gap:
                 await asyncio.sleep(gap)
             async with self._lock:
                 outcome = await self.hass.async_add_executor_job(
-                    self._test_send_once, name, data
+                    self._test_send_once, name, method, data
                 )
             outcome["attempt"] = attempt + 1
-            _LOGGER.info("test_send %s %s attempt %d: %s", name, data, attempt + 1, outcome)
+            _LOGGER.info(
+                "test_send %s %s %s attempt %d: %s", name, method, data, attempt + 1, outcome
+            )
             results.append(outcome)
-        return results
+        return {"method": method, "sent": data, "attempts": results}
 
     def _test_poll(self, name):
         """Read one stat straight from the NetMonitor, including the raw values."""
@@ -475,10 +594,29 @@ class HeatmiserHub:
         result["done"] = datetime.now().isoformat(timespec="milliseconds")
         return result
 
-    async def test_poll_async(self, name):
+    def _test_poll_bulk(self, name):
+        """Read one stat from the bulk pages (quickview.htm and frost.htm)."""
+        result = {"time": datetime.now().isoformat(timespec="milliseconds")}
+        try:
+            stat = self.get_all_status().get(name)
+            if stat is None:
+                result["error"] = f"{name} isn't in the NetMonitor's stat list"
+            else:
+                result["current_temperature"] = stat.current_temperature
+                result["target_temperature"] = stat.target_temperature
+                result["heating"] = stat.current_state == HVACAction.HEATING
+                result["hvac_mode"] = str(stat.hvac_mode)
+        except (requests.RequestException, IndexError, ValueError) as err:
+            result["error"] = str(err)
+        result["done"] = datetime.now().isoformat(timespec="milliseconds")
+        return result
+
+    async def test_poll_async(self, name, method="select"):
         """Read one stat straight from the NetMonitor."""
+        func = self._test_poll if method == "select" else self._test_poll_bulk
         async with self._lock:
-            result = await self.hass.async_add_executor_job(self._test_poll, name)
+            result = await self.hass.async_add_executor_job(func, name)
+        result["method"] = method
         _LOGGER.info("test_poll %s: %s", name, result)
         return result
 

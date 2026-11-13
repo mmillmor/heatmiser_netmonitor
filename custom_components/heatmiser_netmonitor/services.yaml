@@ -176,6 +176,18 @@ test_send:
           max: 600
           mode: box
           unit_of_measurement: s
+    method:
+      name: Method
+      description: >-
+        select sends through right.htm (select the stat, then send: two
+        requests, as normal changes do); map sends one request to tempset.htm
+        or frost.htm, naming the stat in the map.
+      default: select
+      selector:
+        select:
+          options:
+            - select
+            - map
 
 test_poll:
   name: Test poll
@@ -186,3 +198,15 @@ test_poll:
     entity:
       integration: heatmiser_netmonitor
       domain: climate
+  fields:
+    method:
+      name: Method
+      description: >-
+        select reads through right.htm (selects the stat); bulk reads
+        quickview.htm and frost.htm, as normal polling now does.
+      default: select
+      selector:
+        select:
+          options:
+            - select
+            - bulk
