@@ -44,6 +44,8 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
         )
         self.hub = hub
         self.stats = stats
+        # Refresh once a change has been confirmed (or given up on).
+        hub.on_change = self.async_refresh
         # Seed with the data from the initial device listing.
         self.data = {stat.name: stat for stat in stats}
         # Per-stat send/receive counters from statistics.htm.

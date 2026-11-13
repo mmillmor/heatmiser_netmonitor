@@ -168,7 +168,7 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
-        await self._call(self.hub.set_temperature_async(self._stat_name, kwargs["temperature"]))
+        await self._call(self.hub.set_temperature_async(self._stat_name, self._stat_index, kwargs["temperature"]))
         await self.coordinator.async_request_refresh()
 
     @property
@@ -188,17 +188,17 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     async def async_turn_on(self):
         """Turn the heating on."""
-        await self._call(self.hub.set_mode_async(self._stat_name, HVACMode.HEAT))
+        await self._call(self.hub.set_mode_async(self._stat_name, self._stat_index, HVACMode.HEAT))
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self):
         """Turn the heating off."""
-        await self._call(self.hub.set_mode_async(self._stat_name, HVACMode.OFF))
+        await self._call(self.hub.set_mode_async(self._stat_name, self._stat_index, HVACMode.OFF))
         await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode) -> None:
         """Set HVAC mode."""
-        await self._call(self.hub.set_mode_async(self._stat_name, hvac_mode))
+        await self._call(self.hub.set_mode_async(self._stat_name, self._stat_index, HVACMode(hvac_mode)))
         await self.coordinator.async_request_refresh()
 
     async def async_set_time(self) -> None:
