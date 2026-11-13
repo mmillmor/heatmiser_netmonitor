@@ -6,7 +6,8 @@ import voluptuous as vol
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode
 from homeassistant.const import UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -67,6 +68,28 @@ async def async_setup_entry(
 
     platform.async_register_entity_service(
         "setback_heating", {}, "async_setback_heating"
+    )
+
+    platform.async_register_entity_service(
+        "test_send",
+        cv.make_entity_service_schema(
+            {
+                vol.Exclusive("temperature", "setting"): TEMPERATURE,
+                vol.Exclusive("hvac_mode", "setting"): vol.In(["heat", "off"]),
+                vol.Optional("attempts", default=1): vol.All(
+                    vol.Coerce(int), vol.Range(min=1, max=20)
+                ),
+                vol.Optional("gap", default=0): vol.All(
+                    vol.Coerce(float), vol.Range(min=0, max=600)
+                ),
+            },
+        ),
+        "async_test_send",
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    platform.async_register_entity_service(
+        "test_poll", {}, "async_test_poll", supports_response=SupportsResponse.ONLY
     )
 
     platform.async_register_entity_service("set_home", {}, "async_set_home")
@@ -179,6 +202,24 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
         """Set the heating back."""
         await self.hub.setback_heating_async(self._stat_index)
         await self.coordinator.async_request_refresh()
+
+    async def async_test_send(
+        self, attempts, gap, temperature=None, hvac_mode=None
+    ) -> dict:
+        """Send one setting a fixed number of times, for comms testing."""
+        if temperature is not None:
+            data = {"selSetTemp": str(int(temperature))}
+        elif hvac_mode is not None:
+            data = {"selFrost": "1" if hvac_mode == "off" else "0"}
+        else:
+            raise ServiceValidationError("Give either temperature or hvac_mode")
+        results = await self.hub.test_send_async(self._stat_name, data, attempts, gap)
+        return {"stat": self._stat_name, "sent": data, "attempts": results}
+
+    async def async_test_poll(self) -> dict:
+        """Read this stat straight from the NetMonitor, for comms testing."""
+        result = await self.hub.test_poll_async(self._stat_name)
+        return {"stat": self._stat_name, **result}
 
     async def async_set_home(self) -> None:
         """Set home."""

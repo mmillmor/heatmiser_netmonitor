@@ -128,3 +128,61 @@ hold_temperature:
           step: 1
           mode: box
           unit_of_measurement: hours
+
+test_send:
+  name: Test send
+  description: >-
+    For testing communications. Sends one setting to a thermostat exactly the
+    number of times given, with no automatic repeats, and returns what happened.
+  target:
+    entity:
+      integration: heatmiser_netmonitor
+      domain: climate
+  fields:
+    temperature:
+      name: Temperature
+      description: Target temperature to send. Give this or HVAC mode.
+      example: 18
+      selector:
+        number:
+          min: 5
+          max: 35
+          step: 1
+          unit_of_measurement: "°C"
+    hvac_mode:
+      name: HVAC mode
+      description: Mode to send. Give this or temperature.
+      selector:
+        select:
+          options:
+            - heat
+            - "off"
+    attempts:
+      name: Attempts
+      description: How many times to send it.
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: box
+    gap:
+      name: Gap
+      description: Seconds between attempts.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 600
+          mode: box
+          unit_of_measurement: s
+
+test_poll:
+  name: Test poll
+  description: >-
+    For testing communications. Reads a thermostat straight from the NetMonitor,
+    including the raw status string, without updating its entity.
+  target:
+    entity:
+      integration: heatmiser_netmonitor
+      domain: climate

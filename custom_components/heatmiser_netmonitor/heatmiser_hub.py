@@ -420,6 +420,68 @@ class HeatmiserHub:
         else:
             return None
 
+    # --- Comms testing -------------------------------------------------------
+    # These send a setting exactly as many times as asked, with no automatic
+    # repeats, and read a stat back without updating the entities, so the
+    # behaviour of the NetMonitor and the stat network can be measured.
+
+    def _test_send_once(self, name, data):
+        """Select a stat and send it one setting, once. Return what happened."""
+        result = {"time": datetime.now().isoformat(timespec="milliseconds")}
+        try:
+            select = self._post("right.htm", {"rdbkck": "1", "curSelStat": name})
+            result["select_status"] = select.status_code
+            if select.status_code == 200:
+                send = self._post("right.htm", data)
+                result["send_status"] = send.status_code
+        except requests.RequestException as err:
+            result["error"] = str(err)
+        result["done"] = datetime.now().isoformat(timespec="milliseconds")
+        return result
+
+    async def test_send_async(self, name, data, attempts, gap):
+        """Send a setting a fixed number of times, gap seconds apart.
+
+        The lock is released between attempts so polls can run in the gaps.
+        """
+        results = []
+        for attempt in range(attempts):
+            if attempt and gap:
+                await asyncio.sleep(gap)
+            async with self._lock:
+                outcome = await self.hass.async_add_executor_job(
+                    self._test_send_once, name, data
+                )
+            outcome["attempt"] = attempt + 1
+            _LOGGER.info("test_send %s %s attempt %d: %s", name, data, attempt + 1, outcome)
+            results.append(outcome)
+        return results
+
+    def _test_poll(self, name):
+        """Read one stat straight from the NetMonitor, including the raw values."""
+        result = {"time": datetime.now().isoformat(timespec="milliseconds")}
+        try:
+            response = self._post("right.htm", {"rdbkck": "0", "curSelStat": name})
+            result["status"] = response.status_code
+            content = response.content.decode("utf-8")
+            statvals = content.split('statInfo" value="')[1].split('"')[0]
+            result["raw"] = statvals
+            result["current_temperature"] = statvals[0:2]
+            result["target_temperature"] = statvals[2:4]
+            result["heating"] = statvals[8:9] == "1"
+            result["hvac_mode"] = "off" if statvals[10:11] == "1" else "heat"
+        except (requests.RequestException, IndexError, ValueError) as err:
+            result["error"] = str(err)
+        result["done"] = datetime.now().isoformat(timespec="milliseconds")
+        return result
+
+    async def test_poll_async(self, name):
+        """Read one stat straight from the NetMonitor."""
+        async with self._lock:
+            result = await self.hass.async_add_executor_job(self._test_poll, name)
+        _LOGGER.info("test_poll %s: %s", name, result)
+        return result
+
     async def get_device_status_async(self, name) -> HeatmiserStat:
         """Get the device status asynchronously."""
         async with self._lock:
