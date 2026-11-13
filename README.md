@@ -114,9 +114,9 @@ For each thermostat setting Home Assistant changes, the integration keeps the
 value the thermostat is known to have (current) and the value wanted (target),
 and checks them on every 30-second poll:
 
-- A change is sent straight away and then every 15 seconds, four times in all,
-  on its own timer. In testing, changes stuck reliably when several sends were
-  spread over 30-45 seconds, while two sends were hit and miss.
+- A change is sent straight away and then every 2 seconds, five times in all,
+  on its own timer. In testing, a single send or a short burst of three was hit
+  and miss, while ten sends 1 second apart stuck reliably.
 - A reading only counts as the thermostat's real value 90 seconds after the
   last send, because until then the NetMonitor may just be showing what was
   sent. If it then matches the target, the change is confirmed; if it has gone

@@ -27,14 +27,15 @@ COMMS_STATS_EVERY = 10
 # Delivery of temperature and mode changes. Testing on a real network showed
 # that a single send rarely sticks: the NetMonitor shows the new value, then
 # its own read of the stat 25-60 s later puts the old value back. Changes stuck
-# reliably when several sends were spread over 30-45 s (4 sends 15 s apart,
-# 3 sends 15 s apart, 10 sends 1 s apart), while two sends were hit and miss.
+# reliably with 4 sends 15 s apart and with 10 sends 1 s apart, while 3 sends
+# 1 s apart and two sends 30 s apart were hit and miss. 5 sends 2 s apart is
+# the middle ground: about 10 s of sends, like the 10-send burst.
 # So each round sends a change SENDS_PER_ROUND times, RESEND_EVERY seconds
 # apart, on its own timer. A reading only counts as the stat's real value once
 # SETTLE_AFTER seconds have passed since the last send, because until then the
 # NetMonitor may just be echoing what was sent.
-SENDS_PER_ROUND = 4
-RESEND_EVERY = 15
+SENDS_PER_ROUND = 5
+RESEND_EVERY = 2
 SETTLE_AFTER = 90
 MAX_ROUNDS = 3
 
