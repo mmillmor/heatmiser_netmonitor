@@ -89,7 +89,7 @@ boost_heating:
 
 setback_heating:
   name: Setback Heating
-  description: Set a thermostat back (frost protection).
+  description: Put a thermostat into frost protection, leaving the others as they are.
   target:
     entity:
       integration: heatmiser_netmonitor
@@ -180,8 +180,8 @@ test_send:
       name: Method
       description: >-
         select sends through right.htm (select the stat, then send: two
-        requests, as normal changes do); map sends one request to tempset.htm
-        or frost.htm, naming the stat in the map.
+        requests, as normal changes do); map sends one request to tempset.htm,
+        naming the stat in the map (temperature only).
       default: select
       selector:
         select:

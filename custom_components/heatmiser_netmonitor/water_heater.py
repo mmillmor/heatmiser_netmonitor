@@ -88,10 +88,7 @@ class HeatmiserWaterHeater(CoordinatorEntity[HeatmiserCoordinator], WaterHeaterE
         """Return unique ID of entity."""
         return self._stat_id
 
-    @property
-    def native_temperature_unit(self):
-        """Return the unit of measurement."""
-        return UnitOfTemperature.CELSIUS
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
 
     @property
     def current_operation(self):

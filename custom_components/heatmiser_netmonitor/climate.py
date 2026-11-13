@@ -217,7 +217,7 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     async def async_setback_heating(self) -> None:
         """Set the heating back."""
-        await self._call(self.hub.setback_heating_async(self._stat_index))
+        await self._call(self.hub.setback_heating_async(self._stat_name))
         await self.coordinator.async_request_refresh()
 
     async def async_test_send(
@@ -226,6 +226,11 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
         """Send one setting a fixed number of times, for comms testing."""
         if (temperature is None) == (hvac_mode is None):
             raise ServiceValidationError("Give either temperature or hvac_mode")
+        if hvac_mode is not None and method == "map":
+            raise ServiceValidationError(
+                "Modes can only be test-sent with method select: frost.htm sets "
+                "every room's frost state at once"
+            )
         try:
             result = await self.hub.test_send_async(
                 self._stat_name,

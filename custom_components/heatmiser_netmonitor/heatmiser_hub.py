@@ -267,40 +267,23 @@ class HeatmiserHub:
                 self.hold_temperature, stat_index, temperature, hours
             )
 
-    def _frost_map_with(self, stat_index, frost):
-        """Return the current frost map with one stat's position changed.
+    # frost.htm is deliberately not used for writing. Testing showed its map
+    # sets the frost state of every stat at once (1 = frost, 0 = not), so a
+    # write re-asserts the NetMonitor's last reading for every room and can
+    # override a change made at a thermostat that it hasn't read yet.
 
-        frost.htm applies the whole map, so a map with only one stat set would
-        take every other stat out of frost mode.
+    def setback_heating(self, name):
+        """Put one stat into frost protection, leaving the others alone.
+
+        Uses right.htm (select the stat, then set frost), the same proven path
+        as set_mode, rather than frost.htm, whose map sets every stat.
         """
-        if not 0 <= stat_index < QUICKSET_SLOTS:
-            raise ValueError(f"Stat index {stat_index} is outside the stat map")
-        frost_state = self._get_frost_state()
-        return (
-            frost_state[:stat_index]
-            + ("1" if frost else "0")
-            + frost_state[stat_index + 1 :]
-        )
+        self.set_mode(name, HVACMode.OFF)
 
-    def _frost_data(self, frost_map):
-        return {
-            "rdbkck": "2",
-            "frostMap": frost_map,
-            "frostGrp": "0",
-            "frostAct": "1",
-        }
-
-    def setback_heating(self, stat_index):
-        """Set a stat back using the frost form, leaving other stats as they are."""
-        data = self._frost_data(self._frost_map_with(stat_index, True))
-        self._send_repeatedly(lambda: self._post("frost.htm", data))
-
-    async def setback_heating_async(self, stat_index):
+    async def setback_heating_async(self, name):
         """Set back heating asynchronously."""
         async with self._lock:
-            return await self.hass.async_add_executor_job(
-                self.setback_heating, stat_index
-            )
+            return await self.hass.async_add_executor_job(self.setback_heating, name)
 
     @staticmethod
     def _hidden(content, name):
@@ -513,7 +496,7 @@ class HeatmiserHub:
 
         "select" selects the stat on right.htm, then sends the setting there
         (two requests, as set_temperature and set_mode do). "map" sends one
-        request to tempset.htm or frost.htm, naming the stat in the map.
+        request to tempset.htm, naming the stat in the map (temperature only).
         """
         result = {"time": datetime.now().isoformat(timespec="milliseconds")}
         try:
@@ -524,8 +507,7 @@ class HeatmiserHub:
                     send = self._post("right.htm", data)
                     result["send_status"] = send.status_code
             else:
-                page = "frost.htm" if "frostMap" in data else "tempset.htm"
-                send = self._post(page, data)
+                send = self._post("tempset.htm", data)
                 result["send_status"] = send.status_code
         except requests.RequestException as err:
             result["error"] = str(err)
@@ -538,17 +520,16 @@ class HeatmiserHub:
             if temperature is not None:
                 return {"selSetTemp": "{0:02d}".format(int(temperature))}
             return {"selFrost": "1" if hvac_mode == HVACMode.OFF else "0"}
-        if temperature is not None:
-            return {
-                "rdbkck": "2",
-                "quickSet": "{0:02d}".format(int(temperature)),
-                "quickSetMap": self._stat_map(stat_index),
-                "quickSetGrp": "0",
-                "quickSetAct": "1",
-            }
-        return self._frost_data(
-            self._frost_map_with(stat_index, hvac_mode == HVACMode.OFF)
-        )
+        if temperature is None:
+            # frost.htm sets every stat's frost state, so modes are select-only.
+            raise ValueError("Modes can only be test-sent with method select")
+        return {
+            "rdbkck": "2",
+            "quickSet": "{0:02d}".format(int(temperature)),
+            "quickSetMap": self._stat_map(stat_index),
+            "quickSetGrp": "0",
+            "quickSetAct": "1",
+        }
 
     async def test_send_async(
         self, name, stat_index, method, temperature, hvac_mode, attempts, gap

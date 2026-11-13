@@ -82,3 +82,43 @@ actions:
               entity_id: climate.bedroom
 mode: single
 ```
+
+## Comms reliability
+
+The NetMonitor talks to the thermostats over an RS485 network, and on some
+installations messages are lost. The integration helps in a few ways:
+
+- **Polling** reads every thermostat with two requests (`quickview.htm` and
+  `frost.htm`) instead of selecting and reading each one in turn, so it adds
+  less traffic to the network.
+- **Comms success sensors**: each thermostat has a diagnostic sensor showing
+  the share of the NetMonitor's messages to it that got a reply, read from
+  `statistics.htm` every 5 minutes. The raw send and receive counts are
+  attributes. The NetMonitor's counters are four digits, so they wrap after
+  9999.
+- **Errors**: when the NetMonitor can't be reached, actions fail with a normal
+  Home Assistant error, so `continue_on_error` in automations can skip them.
+
+### How the NetMonitor behaves
+
+Testing on a real system showed:
+
+- A single change sent to a thermostat rarely sticks. The NetMonitor shows the
+  new value straight away, then its own read of the thermostat 25-60 seconds
+  later puts the old value back. Sending the change again at least 15 seconds
+  later makes it stick. Temperature and mode changes are therefore sent
+  several times.
+- `frost.htm` sets the frost state of **every** thermostat at once (1 = frost,
+  0 = not), so writing it re-asserts the NetMonitor's last reading for every
+  room, and can override a change made at a thermostat that the NetMonitor
+  hasn't read yet. The integration only reads `frost.htm`; `setback_heating`
+  puts the one thermostat into frost the same way as `set_hvac_mode: off`.
+
+### Test actions
+
+For investigating reliability, `heatmiser_netmonitor.test_send` sends one
+temperature or mode exactly as many times as you ask, with a chosen gap, and
+`heatmiser_netmonitor.test_poll` reads one thermostat straight from the
+NetMonitor without updating its entity. Both return what happened as response
+data. Turning off polling for the integration (System options) while testing
+keeps other traffic off the network.
