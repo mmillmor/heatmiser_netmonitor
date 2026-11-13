@@ -35,15 +35,15 @@ async def test_timed_resend_then_confirm(hass, netmonitor, clock):
     # The UI shows the requested value straight away.
     assert hass.states.get("climate.living_room").attributes["temperature"] == 18
 
-    await resend_done(hass)                         # the timed resend
-    assert len(sends(netmonitor, "selSetTemp=18")) == 2
+    await resend_done(hass)                         # the timed resends
+    assert len(sends(netmonitor, "selSetTemp=18")) == 4
     assert netmonitor.targets[4] == 18
 
     await poll(hass, entry, clock, 60)              # matches, but too soon to trust
     assert not tracked(entry).settled
     await poll(hass, entry, clock, 31)              # 91 s after the resend
     assert tracked(entry).settled and tracked(entry).current == 18
-    assert len(sends(netmonitor, "selSetTemp=18")) == 2   # two sends, not ten
+    assert len(sends(netmonitor, "selSetTemp=18")) == 4   # one round of four
 
 
 async def test_polls_dont_resend_early(hass, netmonitor, clock):
@@ -53,7 +53,7 @@ async def test_polls_dont_resend_early(hass, netmonitor, clock):
     await resend_done(hass)
     for _ in range(2):
         await poll(hass, entry, clock, 30)          # within the settle window
-    assert len(sends(netmonitor, "selSetTemp=18")) == 2
+    assert len(sends(netmonitor, "selSetTemp=18")) == 4
 
 
 async def test_reverted_change_gets_another_round(hass, netmonitor, clock):
@@ -63,13 +63,13 @@ async def test_reverted_change_gets_another_round(hass, netmonitor, clock):
 
     def first_round_fails(kind, index, value):
         count["n"] += 1
-        return False if count["n"] <= 2 else real(kind, index, value)
+        return False if count["n"] <= 4 else real(kind, index, value)
 
     netmonitor._apply_if_repeated = first_round_fails
     await set_temp(hass, "climate.living_room", 18)
     await resend_done(hass)
-    await poll(hass, entry, clock, 91)              # reverted: round 2 (send + resend)
-    assert len(sends(netmonitor, "selSetTemp=18")) == 4
+    await poll(hass, entry, clock, 91)              # reverted: round 2 (four sends)
+    assert len(sends(netmonitor, "selSetTemp=18")) == 8
     assert netmonitor.targets[4] == 18
     await poll(hass, entry, clock, 91)
     assert tracked(entry).settled and tracked(entry).rounds == 2
@@ -82,11 +82,11 @@ async def test_gives_up_after_three_rounds(hass, netmonitor, clock):
     await resend_done(hass)
     for _ in range(3):
         await poll(hass, entry, clock, 91)
-    assert len(sends(netmonitor, "selSetTemp=22")) == 6
+    assert len(sends(netmonitor, "selSetTemp=22")) == 12
     assert tracked(entry).settled and tracked(entry).current == 14   # adopts reading
     assert hass.states.get("climate.living_room").attributes["temperature"] == 14
     await poll(hass, entry, clock, 200)
-    assert len(sends(netmonitor, "selSetTemp=22")) == 6              # and stops
+    assert len(sends(netmonitor, "selSetTemp=22")) == 12             # and stops
 
 
 async def test_change_at_thermostat_is_adopted(hass, netmonitor, clock):
@@ -98,7 +98,7 @@ async def test_change_at_thermostat_is_adopted(hass, netmonitor, clock):
     netmonitor.targets[4] = 16                      # changed at the thermostat
     await poll(hass, entry, clock, 30)
     assert tracked(entry).current == tracked(entry).target == 16
-    assert len(sends(netmonitor, "selSetTemp=18")) == 2               # nothing re-sent
+    assert len(sends(netmonitor, "selSetTemp=18")) == 4               # nothing re-sent
 
 
 async def test_third_value_during_delivery_wins(hass, netmonitor, clock):
@@ -109,7 +109,7 @@ async def test_third_value_during_delivery_wins(hass, netmonitor, clock):
     await poll(hass, entry, clock, 31)
     assert tracked(entry).current == tracked(entry).target == 16
     await poll(hass, entry, clock, 91)
-    assert len(sends(netmonitor, "selSetTemp=18")) == 2               # no new round
+    assert len(sends(netmonitor, "selSetTemp=18")) == 4               # no new round
 
 
 async def test_newer_target_cancels_older_resend(hass, netmonitor, clock):

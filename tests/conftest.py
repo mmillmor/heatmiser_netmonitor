@@ -94,7 +94,7 @@ def clock():
     from unittest.mock import patch
     c = Clock()
     coordinator = "custom_components.heatmiser_netmonitor.coordinator"
-    with patch(f"{coordinator}._now", c), patch(f"{coordinator}.RESEND_AFTER", 0.05):
+    with patch(f"{coordinator}._now", c), patch(f"{coordinator}.RESEND_EVERY", 0.05):
         yield c
 
 

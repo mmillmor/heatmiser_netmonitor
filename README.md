@@ -105,7 +105,7 @@ Testing on a real system showed:
 
 - A single change sent to a thermostat rarely sticks. The NetMonitor shows the
   new value straight away, then its own read of the thermostat 25-60 seconds
-  later puts the old value back. Sending the change again 30 seconds later
+  later puts the old value back. Sending it several times over 30-45 seconds
   makes it stick.
 
 ### How changes are delivered
@@ -114,9 +114,9 @@ For each thermostat setting Home Assistant changes, the integration keeps the
 value the thermostat is known to have (current) and the value wanted (target),
 and checks them on every 30-second poll:
 
-- A change is sent once straight away, and again exactly 30 seconds later on
-  its own timer (two sends 30 s apart stuck every time in testing; gaps of
-  20 s and 60 s didn't).
+- A change is sent straight away and then every 15 seconds, four times in all,
+  on its own timer. In testing, changes stuck reliably when several sends were
+  spread over 30-45 seconds, while two sends were hit and miss.
 - A reading only counts as the thermostat's real value 90 seconds after the
   last send, because until then the NetMonitor may just be showing what was
   sent. If it then matches the target, the change is confirmed; if it has gone
