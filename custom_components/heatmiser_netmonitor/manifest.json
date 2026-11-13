@@ -1,6 +1,6 @@
 {
   "domain": "heatmiser_netmonitor",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "name": "Heatmiser NetMonitor",
   "config_flow": true,
   "categories": ["climate.thermostats_heating", "climate.water_heaters"],
