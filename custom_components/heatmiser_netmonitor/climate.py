@@ -14,7 +14,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import HeatmiserConfigEntry, HeatmiserCoordinator
+from .coordinator import KIND_MODE, KIND_TEMPERATURE, HeatmiserConfigEntry, HeatmiserCoordinator
 from .heatmiser_hub import HeatmiserStat
 from .schemas import HOURS, TEMPERATURE
 
@@ -168,7 +168,7 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
-        await self._call(self.hub.set_temperature_async(self._stat_name, kwargs["temperature"]))
+        await self._call(self.coordinator.async_set(self._stat_name, KIND_TEMPERATURE, kwargs["temperature"]))
         await self.coordinator.async_request_refresh()
 
     @property
@@ -188,17 +188,17 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     async def async_turn_on(self):
         """Turn the heating on."""
-        await self._call(self.hub.set_mode_async(self._stat_name, HVACMode.HEAT))
+        await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.HEAT))
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self):
         """Turn the heating off."""
-        await self._call(self.hub.set_mode_async(self._stat_name, HVACMode.OFF))
+        await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.OFF))
         await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode) -> None:
         """Set HVAC mode."""
-        await self._call(self.hub.set_mode_async(self._stat_name, hvac_mode))
+        await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, hvac_mode))
         await self.coordinator.async_request_refresh()
 
     async def async_set_time(self) -> None:
@@ -217,7 +217,7 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     async def async_setback_heating(self) -> None:
         """Set the heating back."""
-        await self._call(self.hub.setback_heating_async(self._stat_name))
+        await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.OFF))
         await self.coordinator.async_request_refresh()
 
     async def async_test_send(

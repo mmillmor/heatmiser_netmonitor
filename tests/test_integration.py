@@ -58,9 +58,7 @@ async def test_setback_touches_only_that_room(hass, netmonitor):
     assert not any(p == "frost.htm" for p, _ in netmonitor.posts)
     bodies = [b for p, b in netmonitor.posts if p == "/right.htm"]
     assert "curSelStat=Kitchen" in bodies[0] and "selFrost=1" in bodies[1]
-    await hass.async_block_till_done(wait_background_tasks=True)
-    # Kitchen (3) added; Hall, Playroom and Bedroom stay in frost.
-    assert netmonitor.frost_state[:6] == "011101"
+    assert netmonitor.frost_state == before  # one send doesn't stick yet
 
 
 async def test_test_send_and_poll(hass, netmonitor):

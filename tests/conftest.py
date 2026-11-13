@@ -75,13 +75,25 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     yield
 
 
+class Clock:
+    """A controllable stand-in for the coordinator's clock."""
+
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, seconds):
+        self.t += seconds
+
+
 @pytest.fixture(autouse=True)
-def fast_delivery():
-    """Shrink the resend and check delays so tests run quickly."""
+def clock():
     from unittest.mock import patch
-    hub = "custom_components.heatmiser_netmonitor.heatmiser_hub"
-    with patch(f"{hub}.RESEND_AFTER", 0.05), patch(f"{hub}.VERIFY_AFTER", 0.1):
-        yield
+    c = Clock()
+    with patch("custom_components.heatmiser_netmonitor.coordinator._now", c):
+        yield c
 
 
 @pytest.fixture
