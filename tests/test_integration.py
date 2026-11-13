@@ -108,6 +108,6 @@ async def test_failures_raise_homeassistanterror(hass, netmonitor):
     ), patch("custom_components.heatmiser_netmonitor.heatmiser_hub.time.sleep"):
         with pytest.raises(HomeAssistantError):
             await hass.services.async_call(
-                "climate", "set_temperature",
-                {"entity_id": "climate.study", "temperature": 20}, blocking=True,
+                DOMAIN, "set_home",
+                {"entity_id": "climate.study"}, blocking=True,
             )

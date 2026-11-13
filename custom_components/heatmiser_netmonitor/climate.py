@@ -172,9 +172,10 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
-        await self._call(self.coordinator.async_set(self._stat_name, KIND_TEMPERATURE, kwargs["temperature"]))
+        await self.coordinator.async_set(
+            self._stat_name, KIND_TEMPERATURE, kwargs["temperature"]
+        )
         self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
 
     @property
     def hvac_action(self):
@@ -203,21 +204,18 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
 
     async def async_turn_on(self):
         """Turn the heating on."""
-        await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.HEAT))
+        await self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.HEAT)
         self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self):
         """Turn the heating off."""
-        await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.OFF))
+        await self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.OFF)
         self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode) -> None:
         """Set HVAC mode."""
-        await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, hvac_mode))
+        await self.coordinator.async_set(self._stat_name, KIND_MODE, hvac_mode)
         self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
 
     async def async_set_time(self) -> None:
         """Set the time."""
@@ -226,18 +224,23 @@ class HeatmiserClimate(CoordinatorEntity[HeatmiserCoordinator], ClimateEntity):
     async def async_boost_heating(self, temperature) -> None:
         """Boost the heating to a temperature."""
         await self._call(self.hub.boost_heating_async(self._stat_index, temperature))
+        tracked = self.coordinator.tracked.get((self._stat_name, KIND_TEMPERATURE))
+        if tracked is not None:
+            tracked.adopt(int(round(temperature)))
         await self.coordinator.async_request_refresh()
 
     async def async_hold_temperature(self, temperature, hours) -> None:
         """Hold a temperature for a period of time."""
         await self._call(self.hub.hold_temperature_async(self._stat_index, temperature, hours))
+        tracked = self.coordinator.tracked.get((self._stat_name, KIND_TEMPERATURE))
+        if tracked is not None:
+            tracked.adopt(int(round(temperature)))
         await self.coordinator.async_request_refresh()
 
     async def async_setback_heating(self) -> None:
         """Set the heating back."""
-        await self._call(self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.OFF))
+        await self.coordinator.async_set(self._stat_name, KIND_MODE, HVACMode.OFF)
         self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
 
     async def async_test_send(
         self, attempts, gap, method, temperature=None, hvac_mode=None

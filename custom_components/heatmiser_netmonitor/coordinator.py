@@ -76,6 +76,7 @@ class Tracked:
         self.current = self.target = reading
         self.in_flight = False
         self.sent = set()
+        self.round_id += 1
 
 
 type HeatmiserConfigEntry = ConfigEntry[HeatmiserCoordinator]
@@ -135,9 +136,10 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
     async def async_set(self, name: str, kind: str, value) -> None:
         """Set a stat's temperature or mode, and keep delivering it until it sticks.
 
-        Sends once straight away (so an unreachable NetMonitor raises to the
-        caller); later polls resend and confirm it. A newer value for the
-        same stat and setting simply replaces the target.
+        Shows the requested value immediately in Home Assistant, sends a burst
+        of SENDS_PER_ROUND sends RESEND_EVERY seconds apart, and checks and
+        retries on subsequent polls. A newer value for the same stat and
+        setting replaces any request in flight.
         """
         if kind == KIND_TEMPERATURE:
             value = int(value)
@@ -147,96 +149,166 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
         tracked = self.tracked.get(key)
         if tracked is None:
             stat = (self.data or {}).get(name)
-            tracked = Tracked(current=self._reading(stat, kind) if stat else None, target=value)
+            tracked = Tracked(
+                current=self._reading(stat, kind) if stat else None,
+                target=value,
+            )
             self.tracked[key] = tracked
         tracked.target = value
         tracked.in_flight = True
         tracked.sent.add(value)
         tracked.rounds = 1
-        tracked.sends_this_round = 1
+        tracked.sends_this_round = 0
         tracked.last_sent = _now()
         tracked.round_id += 1
-        await self.hub.send_setting_async(name, kind, value)
-        self._schedule_resend(name, kind, tracked)
-
-    def _schedule_resend(self, name: str, kind: str, tracked: Tracked) -> None:
-        """Resend this round's change every RESEND_EVERY seconds, up to SENDS_PER_ROUND sends."""
         round_id = tracked.round_id
+        self.async_update_listeners()
+        await self._send(name, kind, tracked, round_id)
+        if tracked.round_id == round_id and not tracked.settled:
+            self._schedule_resend(name, kind, tracked, round_id)
+
+    def _schedule_resend(
+        self, name: str, kind: str, tracked: Tracked, round_id: int
+    ) -> None:
+        """Resend this round's change every RESEND_EVERY seconds, up to SENDS_PER_ROUND sends."""
 
         async def resend_later():
-            while tracked.sends_this_round < SENDS_PER_ROUND:
+            while (
+                tracked.round_id == round_id
+                and not tracked.settled
+                and tracked.sends_this_round < SENDS_PER_ROUND
+            ):
                 await asyncio.sleep(RESEND_EVERY)
                 if tracked.round_id != round_id or tracked.settled:
                     return
-                await self._send(name, kind, tracked)
+                await self._send(name, kind, tracked, round_id)
 
         self.hass.async_create_background_task(
             resend_later(), f"heatmiser_netmonitor resend {name} {kind}"
         )
 
-    async def _send(self, name: str, kind: str, tracked: Tracked) -> None:
-        tracked.sends_this_round += 1
-        tracked.last_sent = _now()
+    async def _send(
+        self, name: str, kind: str, tracked: Tracked, round_id: int
+    ) -> None:
+        if tracked.round_id != round_id or tracked.settled:
+            return
+        value = tracked.target
+        tracked.sent.add(value)
         try:
-            await self.hub.send_setting_async(name, kind, tracked.target)
+            await self.hub.send_setting_async(
+                name,
+                kind,
+                value,
+                should_send=lambda: tracked.round_id == round_id and not tracked.settled,
+            )
         except (requests.RequestException, ValueError, IndexError) as err:
-            _LOGGER.warning("Sending %s %s to %s failed: %s", kind, tracked.target, name, err)
+            _LOGGER.warning("Sending %s %s to %s failed: %s", kind, value, name, err)
+        finally:
+            if tracked.round_id == round_id and not tracked.settled:
+                tracked.sends_this_round += 1
+                tracked.last_sent = _now()
 
-    async def _reconcile(self, data: dict[str, HeatmiserStat]) -> None:
-        """Compare what each stat reads with what's wanted, and act on it."""
+    async def _reconcile(self, latest: dict[str, HeatmiserStat]) -> None:
+        """Compare what each communicating stat reads with what's wanted, and act on it."""
         now = _now()
-        for (name, kind), tracked in self.tracked.items():
-            stat = data.get(name)
-            reading = self._reading(stat, kind) if stat else None
-            if reading is None:
-                continue  # not communicating; try again next poll
+        to_resend: list[tuple[str, str, Tracked, int]] = []
 
-            if tracked.settled:
-                if reading != tracked.current:
+        for stat in self.stats:
+            raw = latest.get(stat.name)
+            if (
+                raw is None
+                or raw.current_temperature is None
+                or raw.target_temperature is None
+            ):
+                continue  # not communicating ("NC"); try again next poll
+
+            for kind in (KIND_TEMPERATURE, KIND_MODE):
+                reading = self._reading(raw, kind)
+                if reading is None:
+                    continue
+                key = (stat.name, kind)
+                tracked = self.tracked.get(key)
+                if tracked is None:
+                    self.tracked[key] = Tracked(current=reading, target=reading)
+                    continue
+
+                if tracked.settled:
+                    if reading != tracked.current:
+                        _LOGGER.info(
+                            "%s %s changed to %s outside Home Assistant",
+                            stat.name,
+                            kind,
+                            reading,
+                        )
+                        tracked.adopt(reading)
+                    continue
+
+                if tracked.sends_this_round == 0:
+                    # Poll was read before this round's first send completed.
+                    if reading not in tracked.sent:
+                        tracked.current = reading
+                    continue
+
+                if tracked.current is None and reading not in tracked.sent:
+                    tracked.current = reading
+
+                if reading != tracked.current and reading not in tracked.sent:
                     _LOGGER.info(
-                        "%s %s changed to %s outside Home Assistant", name, kind, reading
+                        "%s %s changed to %s outside Home Assistant while %s was being "
+                        "sent; keeping %s",
+                        stat.name,
+                        kind,
+                        reading,
+                        tracked.target,
+                        reading,
                     )
                     tracked.adopt(reading)
-                continue
+                    continue
 
-            if reading != tracked.current and reading not in tracked.sent:
-                _LOGGER.info(
-                    "%s %s changed to %s outside Home Assistant while %s was being "
-                    "sent; keeping %s",
-                    name, kind, reading, tracked.target, reading,
+                since = now - tracked.last_sent
+                if since < SETTLE_AFTER or tracked.sends_this_round < SENDS_PER_ROUND:
+                    continue  # wait for this round's sends, then for them to settle
+
+                if reading == tracked.target:
+                    _LOGGER.info(
+                        "%s %s %s confirmed after %d round(s)",
+                        stat.name,
+                        kind,
+                        tracked.target,
+                        tracked.rounds,
+                    )
+                    tracked.adopt(reading)
+                    continue
+
+                if tracked.rounds >= MAX_ROUNDS:
+                    _LOGGER.error(
+                        "%s %s %s didn't stick after %d rounds; it reads %s",
+                        stat.name,
+                        kind,
+                        tracked.target,
+                        tracked.rounds,
+                        reading,
+                    )
+                    tracked.adopt(reading)
+                    continue
+
+                _LOGGER.warning(
+                    "%s %s %s didn't stick (round %d), sending again",
+                    stat.name,
+                    kind,
+                    tracked.target,
+                    tracked.rounds,
                 )
-                tracked.adopt(reading)
-                continue
+                tracked.rounds += 1
+                tracked.sends_this_round = 0
+                tracked.last_sent = now
+                tracked.round_id += 1
+                to_resend.append((stat.name, kind, tracked, tracked.round_id))
 
-            since = now - tracked.last_sent
-            if since < SETTLE_AFTER or tracked.sends_this_round < SENDS_PER_ROUND:
-                continue  # wait for this round's sends, then for them to settle
-
-            if reading == tracked.target:
-                _LOGGER.info(
-                    "%s %s %s confirmed after %d round(s)",
-                    name, kind, tracked.target, tracked.rounds,
-                )
-                tracked.adopt(reading)
-                continue
-
-            if tracked.rounds >= MAX_ROUNDS:
-                _LOGGER.error(
-                    "%s %s %s didn't stick after %d rounds; it reads %s",
-                    name, kind, tracked.target, tracked.rounds, reading,
-                )
-                tracked.adopt(reading)
-                continue
-
-            _LOGGER.warning(
-                "%s %s %s didn't stick (round %d), sending again",
-                name, kind, tracked.target, tracked.rounds,
-            )
-            tracked.rounds += 1
-            tracked.sends_this_round = 0
-            tracked.round_id += 1
-            await self._send(name, kind, tracked)
-            self._schedule_resend(name, kind, tracked)
+        for name, kind, tracked, round_id in to_resend:
+            await self._send(name, kind, tracked, round_id)
+            if tracked.round_id == round_id and not tracked.settled:
+                self._schedule_resend(name, kind, tracked, round_id)
 
     async def _async_update_data(self) -> dict[str, HeatmiserStat]:
         """Fetch the latest status for every stat in two requests."""
@@ -245,6 +317,8 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
         except (requests.RequestException, IndexError, ValueError) as err:
             raise UpdateFailed(f"Error communicating with NetMonitor: {err}") from err
 
+        await self._reconcile(latest)
+
         data: dict[str, HeatmiserStat] = {}
         for stat in self.stats:
             old = (self.data or {}).get(stat.name, stat)
@@ -252,13 +326,11 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
             if new is None:
                 data[stat.name] = old
                 continue
-            if new.current_temperature is None:
+            if new.current_temperature is None or new.target_temperature is None:
                 # Stat not communicating ("NC"): keep the last known values.
                 new.current_temperature = old.current_temperature
                 new.target_temperature = old.target_temperature
             data[stat.name] = new
-
-        await self._reconcile(data)
 
         if self._polls % COMMS_STATS_EVERY == 0:
             try:

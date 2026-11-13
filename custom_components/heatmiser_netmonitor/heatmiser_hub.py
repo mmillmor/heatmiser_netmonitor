@@ -417,11 +417,14 @@ class HeatmiserHub:
         self._post("right.htm", {"rdbkck": "1", "curSelStat": name}).raise_for_status()
         self._post("right.htm", data).raise_for_status()
 
-    async def send_setting_async(self, name, kind, value):
+    async def send_setting_async(self, name, kind, value, should_send=None) -> bool:
         """Send one temperature or mode setting to a stat, once."""
         data = self._setting_data(kind, value)
         async with self._lock:
+            if should_send is not None and not should_send():
+                return False
             await self.hass.async_add_executor_job(self._select_and_set, name, data)
+            return True
 
     def get_device_status(self, name) -> HeatmiserStat:
         """Get the device status."""
