@@ -90,9 +90,11 @@ class Clock:
 
 @pytest.fixture(autouse=True)
 def clock():
+    """Fake clock for settling; the resend timer runs after 0.05 s of real time."""
     from unittest.mock import patch
     c = Clock()
-    with patch("custom_components.heatmiser_netmonitor.coordinator._now", c):
+    coordinator = "custom_components.heatmiser_netmonitor.coordinator"
+    with patch(f"{coordinator}._now", c), patch(f"{coordinator}.RESEND_AFTER", 0.05):
         yield c
 
 

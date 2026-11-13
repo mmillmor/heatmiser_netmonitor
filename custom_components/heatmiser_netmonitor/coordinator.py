@@ -1,6 +1,7 @@
 """Data update coordinator for the Heatmiser NetMonitor integration."""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
 import logging
@@ -26,10 +27,12 @@ COMMS_STATS_EVERY = 10
 # Delivery of temperature and mode changes. Testing on a real network showed
 # that a single send rarely sticks: the NetMonitor shows the new value, then
 # its own read of the stat 25-60 s later puts the old value back. Two sends
-# 15-30 s apart stuck every time. So within a round a change is sent, and sent
-# again RESEND_AFTER seconds later; a reading only counts as the stat's real
-# value once SETTLE_AFTER seconds have passed since the last send, because
-# until then the NetMonitor may just be echoing what was sent.
+# exactly 30 s apart stuck every time (6 of 6); gaps of 20 s and 60 s did not.
+# So each round sends a change, and sends it again RESEND_AFTER seconds later
+# on its own timer (not at the next poll, which could be up to 60 s later). A
+# reading only counts as the stat's real value once SETTLE_AFTER seconds have
+# passed since the last send, because until then the NetMonitor may just be
+# echoing what was sent.
 RESEND_AFTER = 30
 SETTLE_AFTER = 90
 MAX_ROUNDS = 3
@@ -51,6 +54,9 @@ class Tracked:
     last_sent: float = 0.0
     sends_this_round: int = 0
     rounds: int = 0
+    # Identifies the current round, so a timed resend from an older round or
+    # an older target does nothing.
+    round_id: int = 0
 
     @property
     def settled(self) -> bool:
@@ -132,7 +138,22 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
         tracked.rounds = 1
         tracked.sends_this_round = 1
         tracked.last_sent = _now()
+        tracked.round_id += 1
         await self.hub.send_setting_async(name, kind, value)
+        self._schedule_resend(name, kind, tracked)
+
+    def _schedule_resend(self, name: str, kind: str, tracked: Tracked) -> None:
+        """Resend this round's change RESEND_AFTER seconds from now."""
+        round_id = tracked.round_id
+
+        async def resend_later():
+            await asyncio.sleep(RESEND_AFTER)
+            if tracked.round_id == round_id and not tracked.settled:
+                await self._send(name, kind, tracked)
+
+        self.hass.async_create_background_task(
+            resend_later(), f"heatmiser_netmonitor resend {name} {kind}"
+        )
 
     async def _send(self, name: str, kind: str, tracked: Tracked) -> None:
         tracked.sends_this_round += 1
@@ -169,10 +190,8 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
                 continue
 
             since = now - tracked.last_sent
-            if since < SETTLE_AFTER:
-                if tracked.sends_this_round < 2 and since >= RESEND_AFTER:
-                    await self._send(name, kind, tracked)
-                continue
+            if since < SETTLE_AFTER or tracked.sends_this_round < 2:
+                continue  # wait for the timed resend, then for it to settle
 
             if reading == tracked.target:
                 _LOGGER.info(
@@ -196,7 +215,9 @@ class HeatmiserCoordinator(DataUpdateCoordinator[dict[str, HeatmiserStat]]):
             )
             tracked.rounds += 1
             tracked.sends_this_round = 0
+            tracked.round_id += 1
             await self._send(name, kind, tracked)
+            self._schedule_resend(name, kind, tracked)
 
     async def _async_update_data(self) -> dict[str, HeatmiserStat]:
         """Fetch the latest status for every stat in two requests."""
