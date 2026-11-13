@@ -28,6 +28,10 @@ QUICKSET_SLOTS = 32
 SEND_ATTEMPTS = 10
 # Seconds to wait for the NetMonitor to answer a request.
 REQUEST_TIMEOUT = 10
+# Delivery of temperature and mode changes (see _deliver).
+RESEND_AFTER = 30
+VERIFY_AFTER = 90
+DELIVERY_ROUNDS = 3
 
 
 class HeatmiserStat:
@@ -69,6 +73,10 @@ class HeatmiserHub:
         # The NetMonitor keeps a "currently selected stat" server-side, so
         # requests must not interleave.
         self._lock = asyncio.Lock()
+        # Latest change per (stat, kind), so newer changes cancel older resends.
+        self._generation: dict[tuple[str, str], int] = {}
+        # Called after a change has been confirmed or given up on.
+        self.on_change = None
 
     def _get(self, page):
         """GET a NetMonitor page."""
@@ -272,18 +280,13 @@ class HeatmiserHub:
     # write re-asserts the NetMonitor's last reading for every room and can
     # override a change made at a thermostat that it hasn't read yet.
 
-    def setback_heating(self, name):
+    async def setback_heating_async(self, name):
         """Put one stat into frost protection, leaving the others alone.
 
-        Uses right.htm (select the stat, then set frost), the same proven path
-        as set_mode, rather than frost.htm, whose map sets every stat.
+        The same as set_mode off, through right.htm, rather than frost.htm,
+        whose map sets every stat.
         """
-        self.set_mode(name, HVACMode.OFF)
-
-    async def setback_heating_async(self, name):
-        """Set back heating asynchronously."""
-        async with self._lock:
-            return await self.hass.async_add_executor_job(self.setback_heating, name)
+        await self.set_mode_async(name, HVACMode.OFF)
 
     @staticmethod
     def _hidden(content, name):
@@ -411,31 +414,111 @@ class HeatmiserHub:
         async with self._lock:
             return await self.hass.async_add_executor_job(self.get_devices)
 
-    def set_temperature(self, name, target_temperature):
-        """Set a device target temperature."""
+    # --- Delivering temperature and mode changes ------------------------------
+    # Testing on a real network showed a single send rarely sticks: the
+    # NetMonitor shows the new value, then its own read of the stat 25-60 s
+    # later puts the old value back. Two sends 15-30 s apart stuck every time.
+    # So each change is sent once straight away, sent again RESEND_AFTER
+    # seconds later in the background, then checked VERIFY_AFTER seconds after
+    # the first send; if it has gone back, the round repeats, up to
+    # DELIVERY_ROUNDS times.
+    #
+    # Sends go through right.htm (select the stat, then set it), which only
+    # touches that stat. The lock keeps each select-and-set pair together, so
+    # changes to several stats at once can't be mixed up.
 
-        self._set_stat_value(name, {"selSetTemp": str(int(target_temperature))})
+    def _select_and_set(self, name, data):
+        """Select a stat on right.htm, then send it one setting, once."""
+        select = self._post("right.htm", {"rdbkck": "1", "curSelStat": name})
+        select.raise_for_status()
+        self._post("right.htm", data).raise_for_status()
+
+    async def _send_change(self, name, data):
+        async with self._lock:
+            await self.hass.async_add_executor_job(self._select_and_set, name, data)
+
+    async def _deliver(self, name, kind, data, landed, describe):
+        """Send a change now, then resend and check it in the background.
+
+        The first send is awaited, so a NetMonitor that can't be reached raises
+        to the caller. A newer change of the same kind for the same stat
+        cancels any pending resends of this one.
+        """
+        key = (name, kind)
+        self._generation[key] = generation = self._generation.get(key, 0) + 1
+
+        def superseded():
+            return self._generation.get(key) != generation
+
+        await self._send_change(name, data)
+
+        async def resend():
+            try:
+                await self._send_change(name, data)
+            except (requests.RequestException, ValueError, IndexError) as err:
+                _LOGGER.warning("Resending %s to %s failed: %s", describe, name, err)
+
+        async def follow_up():
+            for delivery_round in range(1, DELIVERY_ROUNDS + 1):
+                await asyncio.sleep(RESEND_AFTER)
+                if superseded():
+                    return
+                await resend()
+
+                await asyncio.sleep(VERIFY_AFTER - RESEND_AFTER)
+                if superseded():
+                    return
+                try:
+                    async with self._lock:
+                        status = await self.hass.async_add_executor_job(self.get_all_status)
+                    stat = status.get(name)
+                except (requests.RequestException, ValueError, IndexError) as err:
+                    _LOGGER.warning("Couldn't check %s on %s: %s", describe, name, err)
+                    stat = None
+
+                if stat is not None and landed(stat):
+                    _LOGGER.info(
+                        "%s on %s confirmed after %d round(s)", describe, name, delivery_round
+                    )
+                    break
+                if delivery_round == DELIVERY_ROUNDS:
+                    _LOGGER.error(
+                        "%s on %s didn't stick after %d rounds", describe, name, DELIVERY_ROUNDS
+                    )
+                    break
+                _LOGGER.warning(
+                    "%s on %s didn't stick (round %d), sending again",
+                    describe, name, delivery_round,
+                )
+                await resend()
+
+            if not superseded() and self.on_change is not None:
+                await self.on_change()
+
+        self.hass.async_create_background_task(
+            follow_up(), f"heatmiser_netmonitor deliver {name} {kind}"
+        )
 
     async def set_temperature_async(self, name, target_temperature):
-        """Set a device target temperature asynchronously."""
-        async with self._lock:
-            return await self.hass.async_add_executor_job(
-                self.set_temperature, name, target_temperature
-            )
-
-    def set_mode(self, name, hvac_mode):
-        """Set a device target mode."""
-        mode = "0"
-        if hvac_mode == HVACMode.OFF:
-            mode = "1"
-        self._set_stat_value(name, {"selFrost": mode})
+        """Set a stat's target temperature, then resend and check it."""
+        temperature = int(target_temperature)
+        await self._deliver(
+            name,
+            "temperature",
+            {"selSetTemp": "{0:02d}".format(temperature)},
+            lambda stat: stat.target_temperature == temperature,
+            f"Target {temperature}°C",
+        )
 
     async def set_mode_async(self, name, hvac_mode):
-        """Set a device target mode asynchronously."""
-        async with self._lock:
-            return await self.hass.async_add_executor_job(
-                self.set_mode, name, hvac_mode
-            )
+        """Set a stat's mode (heat, or off for frost protection), then resend and check it."""
+        await self._deliver(
+            name,
+            "mode",
+            {"selFrost": "1" if hvac_mode == HVACMode.OFF else "0"},
+            lambda stat: stat.hvac_mode == hvac_mode,
+            f"Mode {hvac_mode}",
+        )
 
     def get_device_status(self, name) -> HeatmiserStat:
         """Get the device status."""

@@ -56,9 +56,11 @@ async def test_setback_touches_only_that_room(hass, netmonitor):
         )
     # Never writes frost.htm, whose map sets every room's frost state.
     assert not any(p == "frost.htm" for p, _ in netmonitor.posts)
-    assert netmonitor.frost_state == before
     bodies = [b for p, b in netmonitor.posts if p == "/right.htm"]
     assert "curSelStat=Kitchen" in bodies[0] and "selFrost=1" in bodies[1]
+    await hass.async_block_till_done(wait_background_tasks=True)
+    # Kitchen (3) added; Hall, Playroom and Bedroom stay in frost.
+    assert netmonitor.frost_state[:6] == "011101"
 
 
 async def test_test_send_and_poll(hass, netmonitor):

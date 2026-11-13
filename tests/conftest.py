@@ -18,12 +18,25 @@ def page(**fields):
 
 
 class FakeNetMonitor:
+    """Behaves like the real NetMonitor seen in testing: a change sent through
+    right.htm only sticks when the same value reaches the same stat a second
+    time, and quickview and frostState show only applied changes."""
+
     def __init__(self):
         self.frost_state = "011001" + "0" * 26  # Hall, Playroom, Bedroom
+        self.targets = {i: int(q[2:4]) for i, q in enumerate(QUICK)}
         self.posts = []
+        self.selected = None
+        self._seen = {}
+
+    def _apply_if_repeated(self, kind, index, value):
+        key = (kind, index, value)
+        self._seen[key] = self._seen.get(key, 0) + 1
+        return self._seen[key] >= 2
 
     def quickview(self, request, context):
-        return page(hmcookies="11110000", quickview="".join(QUICK),
+        quick = [q[:2] + f"{self.targets[i]:02d}" + q[4:] for i, q in enumerate(QUICK)]
+        return page(hmcookies="11110000", quickview="".join(quick),
                     statname="#".join(NAMES), statmap=STATMAP)
 
     def frost(self, request, context):
@@ -39,13 +52,36 @@ class FakeNetMonitor:
         return page(websendCnt=sent, webrecvCnt=recv, prtmap="31111111111!1" + "!" * 19)
 
     def other_post(self, request, context):
+        from urllib.parse import parse_qs
         self.posts.append((request.path, request.text))
+        q = {k: v[0] for k, v in parse_qs(request.text).items()}
+        if request.path == "/right.htm":
+            if "curSelStat" in q:
+                self.selected = NAMES.index(q["curSelStat"])
+            elif self.selected is not None and "selSetTemp" in q:
+                value = int(q["selSetTemp"])
+                if self._apply_if_repeated("temp", self.selected, value):
+                    self.targets[self.selected] = value
+            elif self.selected is not None and "selFrost" in q:
+                value = q["selFrost"]
+                if self._apply_if_repeated("frost", self.selected, value):
+                    i = self.selected
+                    self.frost_state = self.frost_state[:i] + value + self.frost_state[i + 1:]
         return page(statInfo="21180000000000", hwBoost="ff")
 
 
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations):
     yield
+
+
+@pytest.fixture(autouse=True)
+def fast_delivery():
+    """Shrink the resend and check delays so tests run quickly."""
+    from unittest.mock import patch
+    hub = "custom_components.heatmiser_netmonitor.heatmiser_hub"
+    with patch(f"{hub}.RESEND_AFTER", 0.05), patch(f"{hub}.VERIFY_AFTER", 0.1):
+        yield
 
 
 @pytest.fixture
